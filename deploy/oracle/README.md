@@ -41,32 +41,46 @@ In the OCI Console → **Compute → Instances → Create instance**:
 ### "Out of capacity for shape VM.Standard.A1.Flex"
 
 This is the single most common obstacle to using the free tier, and it is not something
-you have done wrong — Ampere capacity is heavily oversubscribed, so Oracle simply has none
-free in that availability domain right now.
+you have done wrong — Ampere is heavily oversubscribed, so Oracle has none free in that
+availability domain at that moment. Capacity is released continuously as other people
+terminate instances, so the reliable approach is to keep asking.
 
-What actually works, roughly in order of effectiveness:
+**The easy way — OCI Cloud Shell.** Click the `>_` icon in the console's top bar. The CLI
+is already authenticated there, so there is nothing to configure:
 
-1. **Ask for less.** A 1 OCPU / 6 GB request is far easier to place than 4 / 24. A1.Flex
-   can be resized upward later without rebuilding, so this costs you nothing permanent.
-   6 GB is enough to build and run everything, just more slowly.
-2. **Try every availability domain.** Capacity is tracked per-AD. AD-1 being full tells you
-   nothing about AD-2 or AD-3. (Note: many regions have only one AD.)
-3. **Retry on a loop.** Capacity is released continuously as other people terminate
-   instances. Scripted retrying is the standard approach and usually succeeds within a few
-   hours:
-   ```bash
-   export COMPARTMENT_OCID=ocid1.tenancy.oc1..xxxxx
-   export SUBNET_OCID=ocid1.subnet.oc1..xxxxx
-   export IMAGE_OCID=ocid1.image.oc1..xxxxx
-   ./deploy/oracle/retry-create.sh          # add OCPUS=1 MEMORY_GB=6 if needed
-   ```
-4. **Do not specify a fault domain.** Letting Oracle choose gives it more placement options.
-5. **Different region.** Effective, but your home region is fixed at signup, and moving
-   means a new account.
+```bash
+git clone https://github.com/spaceman-dev/cmb-lab.git
+cd cmb-lab && ./deploy/oracle/retry-create.sh
+```
 
-Upgrading to Pay As You Go also removes the capacity restriction on Always Free shapes —
-they stay free, but you are no longer in the lowest-priority queue. Only do this if you are
-comfortable that a misconfigured non-free resource could incur charges.
+It discovers your tenancy, the newest Oracle Linux 9 ARM image, a public subnet, and every
+availability domain, then loops until one succeeds. Leave the tab open.
+
+Tune it if needed:
+
+```bash
+OCPUS=1 MEMORY_GB=6 INTERVAL=30 ./deploy/oracle/retry-create.sh
+```
+
+What actually helps, in order:
+
+1. **Ask for less.** 1 OCPU / 6 GB places far more easily than 4 / 24, and A1.Flex can be
+   resized upward later without rebuilding. 6 GB builds and runs everything, just slower.
+2. **Try every availability domain.** Capacity is per-AD — AD-1 being full says nothing
+   about AD-2. The script does this automatically. (Some regions have only one AD.)
+3. **Retry on a loop.** Hours, sometimes a day. This is normal and not a sign of a problem.
+4. **Do not pin a fault domain.** Letting Oracle choose gives it more placement options.
+5. **Different region.** Effective, but your home region is fixed at signup.
+
+Upgrading to Pay As You Go also lifts the capacity restriction — Always Free shapes stay
+free, but you leave the lowest-priority queue. Only do this if you are comfortable that a
+misconfigured non-free resource could incur charges.
+
+> **While you wait:** the [static showcase](../../docs/deployment.md#strategy-a--static-showcase-recommended)
+> deploys to Vercel or Netlify in minutes, free and permanently. It serves the full Learn
+> tab, the glossary, the curated assistant, and all pre-computed results — everything
+> except live recomputation. Worth having up regardless.
+
 
 
 ## 2. Connect
