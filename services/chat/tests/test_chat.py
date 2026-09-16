@@ -36,6 +36,45 @@ def test_every_curated_question_is_answerable_without_a_key():
             assert not result.needs_llm, f"{question!r} would have fallen through to the LLM"
 
 
+def test_curated_questions_still_work_before_the_pipeline_has_run(monkeypatch):
+    """A fresh deployment has no results yet, and must still answer sensibly.
+
+    Measurement answers normally splice in live pipeline values. On a brand new instance
+    those are all None, and an earlier version fell through to "I'm not certain what you
+    are asking" — which is wrong, because the question was understood perfectly. CI caught
+    this because CI has no data directory.
+    """
+    import cmblab_chat.assistant as assistant
+
+    def no_results(keys):
+        return {k: {"label": k.replace("_", " "), "value": None, "display": ""} for k in keys}
+
+    monkeypatch.setattr(assistant, "resolve", no_results)
+
+    for topic in topics.TOPICS:
+        for question in topic.questions:
+            result = answer(question)
+            assert result.text.strip(), f"{question!r} produced an empty answer with no data"
+            assert not result.needs_llm, f"{question!r} fell through to the LLM with no data"
+
+
+def test_missing_measurement_says_what_to_run(monkeypatch):
+    import cmblab_chat.assistant as assistant
+
+    monkeypatch.setattr(
+        assistant,
+        "resolve",
+        lambda keys: {k: {"label": "First acoustic peak", "value": None} for k in keys},
+    )
+
+    result = answer("what is the first acoustic peak?")
+    assert result.intent == "not_measured"
+    assert not result.needs_llm
+    # It must point somewhere actionable rather than just apologising.
+    assert "Spectrum" in result.text
+    assert "make spectrum" in result.text
+
+
 def test_topics_are_well_formed():
     ids = [t.id for t in topics.TOPICS]
     assert len(ids) == len(set(ids)), "topic ids must be unique"

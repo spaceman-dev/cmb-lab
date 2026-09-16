@@ -115,11 +115,60 @@ DEFAULT_SUGGESTIONS = [
 ]
 
 
+#: What produces each live measurement, so a question asked before the pipeline has run gets
+#: a useful answer instead of a shrug. Keyed by resolver name.
+PRODUCED_BY: dict[str, tuple[str, str]] = {
+    "first_peak_ell": ("Spectrum", "make spectrum"),
+    "first_peak_dl": ("Spectrum", "make spectrum"),
+    "chi2_per_dof": ("Spectrum", "make spectrum"),
+    "f_sky": ("Spectrum", "make spectrum"),
+    "n_bandpowers": ("Spectrum", "make spectrum"),
+    "map_rms": ("Sky Map", "make data-bootstrap"),
+    "map_nside": ("Sky Map", "make data-bootstrap"),
+    "beam_labels": ("Spectrum", "make data-bootstrap"),
+    "theory_peak_ell": ("Playground", "cmblab-cosmology theory"),
+    "posterior_H0": ("Inference", "cmblab-cosmology fit"),
+    "posterior_ombh2": ("Inference", "cmblab-cosmology fit"),
+    "tension_H0": ("Inference", "cmblab-cosmology fit"),
+    "anomaly_summary": ("Anomalies", "cmblab-anomaly run"),
+    "alignment_angle": ("Anomalies", "cmblab-anomaly run"),
+    "alignment_p": ("Anomalies", "cmblab-anomaly run"),
+}
+
+
+def _not_measured_yet(key: str, label: str) -> Answer:
+    """A complete answer for a quantity this instance has not computed yet.
+
+    Falling through to the generic "I'm not sure what you mean" would be wrong here: we
+    understood the question perfectly, we simply have no number for it. Say so, and say
+    what to run.
+    """
+    tab, command = PRODUCED_BY.get(key, ("Spectrum", "make spectrum"))
+    return Answer(
+        text=(
+            f"**{label}** has not been measured on this instance yet.\n\n"
+            f"It comes out of the **{tab}** tab — open it and start a run, or from the "
+            f"command line:\n\n```\n{command}\n```\n\n"
+            "I only quote numbers this pipeline actually produced, so I would rather tell "
+            "you it is missing than recite a textbook value as if we had measured it."
+        ),
+        intent="not_measured",
+        confidence=0.75,
+        suggestions=[
+            f"What is {label.lower()}?",
+            "How do I run a power spectrum?",
+            "What did our pipeline measure?",
+        ],
+    )
+
+
 def _measurement_answer(key: str) -> Answer | None:
     values = resolve([key])
     payload = values.get(key)
-    if not payload or payload.get("value") is None:
+    if not payload:
         return None
+    if payload.get("value") is None:
+        return _not_measured_yet(key, payload.get("label", key.replace("_", " ")))
 
     lines = [f"**{payload['label']}**", "", f"## {payload['display']}"]
     if payload.get("context"):
@@ -161,6 +210,30 @@ def _summary_answer() -> Answer:
         for k in keys
         if (v := values.get(k)) and v.get("value") is not None
     ]
+
+    if not rows:
+        # Nothing has been computed yet. Explain the project rather than showing a
+        # table of blanks.
+        return Answer(
+            text=(
+                "**This pipeline has not been run on this instance yet.**\n\n"
+                "When it runs it measures the cosmic microwave background power spectrum "
+                "from raw NASA WMAP data: it cross-correlates two independent detectors so "
+                "their noise cancels, deconvolves the measured beams, masks the Galaxy, and "
+                "subtracts unresolved point sources. Out of that come the position of the "
+                "first acoustic peak, the cosmological parameters, and calibrated "
+                "significances for the four large-angle anomalies.\n\n"
+                "Start it from the **Spectrum** tab, or run:\n\n```\nmake data-bootstrap\n"
+                "make spectrum\n```"
+            ),
+            intent="not_measured",
+            confidence=0.8,
+            suggestions=[
+                "Why is the first peak at ℓ = 220?",
+                "What is a cross-spectrum and why did we use one?",
+                "How do I run a power spectrum?",
+            ],
+        )
 
     lines = [
         "**What this pipeline measured, from raw NASA archive data**",
