@@ -21,8 +21,8 @@ set -uo pipefail
 
 SHAPE="${SHAPE:-VM.Standard.A1.Flex}"
 OCPUS="${OCPUS:-1}"                  # free tier allows 4 total; 1 places far more easily
-MEMORY_GB="${MEMORY_GB:-6}"          # free tier allows 24 total
-BOOT_VOLUME_GB="${BOOT_VOLUME_GB:-100}"
+MEMORY_GB="${MEMORY_GB:-6}"          # free tier allows 24 total; 6 is the A1 minimum
+BOOT_VOLUME_GB="${BOOT_VOLUME_GB:-50}"
 DISPLAY_NAME="${DISPLAY_NAME:-cmb-lab}"
 INTERVAL="${INTERVAL:-60}"           # seconds between full passes
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-0}"    # 0 = unlimited
@@ -30,6 +30,42 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-0}"    # 0 = unlimited
 log()  { printf '\033[36m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33m  ! %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ── Always Free guard rails ─────────────────────────────────────────────────────────────
+# This script must never be able to create a billable resource. Oracle bills silently the
+# moment you step outside the Always Free envelope, so the limits are enforced here rather
+# than trusted to the caller. Numbers from Oracle's Always Free resource list.
+FREE_SHAPES="VM.Standard.A1.Flex VM.Standard.E2.1.Micro"
+FREE_MAX_OCPUS_A1=4        # 4 OCPU of Ampere across all instances
+FREE_MAX_MEMORY_A1=24      # 24 GB of Ampere across all instances
+FREE_MAX_BOOT_GB=200       # 200 GB of block volume in total
+
+grep -qw -- "$SHAPE" <<<"$FREE_SHAPES" || die "Refusing to create shape '$SHAPE'.
+  It is not in the Always Free list and would be billed.
+  Allowed: $FREE_SHAPES"
+
+if [[ "$SHAPE" == "VM.Standard.A1.Flex" ]]; then
+  (( OCPUS >= 1 && OCPUS <= FREE_MAX_OCPUS_A1 )) \
+    || die "OCPUS=$OCPUS is outside the Always Free range (1-$FREE_MAX_OCPUS_A1)."
+  (( MEMORY_GB >= 6 && MEMORY_GB <= FREE_MAX_MEMORY_A1 )) \
+    || die "MEMORY_GB=$MEMORY_GB is outside the Always Free range (6-$FREE_MAX_MEMORY_A1)."
+  # Ampere allocates 6 GB per OCPU; asking for more than that ratio leaves the free tier.
+  (( MEMORY_GB <= OCPUS * 6 )) \
+    || die "MEMORY_GB=$MEMORY_GB exceeds 6 GB per OCPU for $OCPUS OCPU.
+  Always Free gives 6 GB per Ampere core. Use MEMORY_GB=$(( OCPUS * 6 )) or fewer OCPUs."
+fi
+
+(( BOOT_VOLUME_GB >= 47 && BOOT_VOLUME_GB <= FREE_MAX_BOOT_GB )) \
+  || die "BOOT_VOLUME_GB=$BOOT_VOLUME_GB is outside the Always Free range (47-$FREE_MAX_BOOT_GB)."
+
+# 1 GB cannot run this: the scientific Python imports alone need ~1.05 GB across the eight
+# services. Fail loudly rather than producing an instance that OOMs on first request.
+if [[ "$SHAPE" == "VM.Standard.E2.1.Micro" ]]; then
+  die "VM.Standard.E2.1.Micro has 1 GB of RAM and cannot run cmb-lab.
+  Measured: ~131 MB per service to import numpy/astropy/healpy/camb, x8 services
+  = ~1.05 GB before any data is loaded, plus ~300 MB for the OS.
+  Use VM.Standard.A1.Flex with at least 1 OCPU / 6 GB."
+fi
 
 command -v oci >/dev/null || die "OCI CLI not found.
   In the OCI Console, click the '>_' Cloud Shell icon — it is pre-installed there.
@@ -103,9 +139,55 @@ mapfile -t ADS < <(oci iam availability-domain list "${OCI_ARGS[@]}" \
   | tr -d '[]", ' | grep -v '^$')
 (( ${#ADS[@]} )) || die "Could not list availability domains. Is the CLI authenticated?"
 
+# ── Do not exceed the Always Free quota with what already exists ────────────────────────
+# The allowance is tenancy-wide, not per-instance, so a forgotten instance silently eats
+# into it. Anything beyond the envelope starts billing.
+used=$(oci compute instance list "${OCI_ARGS[@]}" \
+  --compartment-id "$COMPARTMENT_OCID" --all \
+  --query 'data[?"lifecycle-state"!=`TERMINATED`].{s:shape,o:"shape-config".ocpus,m:"shape-config"."memory-in-gbs",n:"display-name",id:id}' \
+  --output json 2>/dev/null)
+
+if [[ -n "$used" && "$used" != "null" && "$used" != "[]" ]]; then
+  log "Existing (non-terminated) instances:"
+  python3 - "$used" <<'PY' || true
+import json, sys
+rows = json.loads(sys.argv[1])
+a1o = a1m = 0.0
+for r in rows:
+    print(f"    {r.get('n','?'):32s} {r.get('s','?'):24s} "
+          f"{r.get('o') or 0:g} OCPU / {r.get('m') or 0:g} GB")
+    if r.get('s') == 'VM.Standard.A1.Flex':
+        a1o += r.get('o') or 0
+        a1m += r.get('m') or 0
+if a1o or a1m:
+    print(f"    -> Ampere already in use: {a1o:g} OCPU / {a1m:g} GB of 4 / 24")
+PY
+
+  a1_used_ocpu=$(python3 -c "
+import json,sys
+print(sum(r.get('o') or 0 for r in json.loads(sys.argv[1]) if r.get('s')=='VM.Standard.A1.Flex'))
+" "$used" 2>/dev/null || echo 0)
+  a1_used_mem=$(python3 -c "
+import json,sys
+print(sum(r.get('m') or 0 for r in json.loads(sys.argv[1]) if r.get('s')=='VM.Standard.A1.Flex'))
+" "$used" 2>/dev/null || echo 0)
+
+  if [[ "$SHAPE" == "VM.Standard.A1.Flex" ]]; then
+    total_o=$(python3 -c "print($a1_used_ocpu + $OCPUS)")
+    total_m=$(python3 -c "print($a1_used_mem + $MEMORY_GB)")
+    over=$(python3 -c "print(1 if ($total_o > $FREE_MAX_OCPUS_A1 or $total_m > $FREE_MAX_MEMORY_A1) else 0)")
+    if [[ "$over" == "1" ]]; then
+      die "Creating this instance would take Ampere usage to ${total_o} OCPU / ${total_m} GB,
+  over the Always Free limit of ${FREE_MAX_OCPUS_A1} OCPU / ${FREE_MAX_MEMORY_A1} GB, and the excess would be billed.
+  Terminate an existing instance first, or lower OCPUS / MEMORY_GB."
+    fi
+  fi
+fi
+
 cat <<EOF
 
-  Requesting ${OCPUS} OCPU / ${MEMORY_GB} GB  ${SHAPE}
+  Requesting ${OCPUS} OCPU / ${MEMORY_GB} GB  ${SHAPE}   (Always Free)
+  Boot volume: ${BOOT_VOLUME_GB} GB
   Image:   ${IMAGE_OCID:0:40}...
   Subnet:  ${SUBNET_OCID:0:40}...  (public IPs enabled)
   Key:     $SSH_PUBLIC_KEY

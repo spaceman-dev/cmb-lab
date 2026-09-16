@@ -48,7 +48,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// --- meta -------------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/health", func(w http.ResponseWriter, r *http.Request) {
+	health := func(w http.ResponseWriter, r *http.Request) {
 		hits, misses, size := store.Stats()
 
 		// Probe upstreams concurrently: eight sequential 2 s timeouts would make a
@@ -64,13 +64,36 @@ func main() {
 		}
 		wg.Wait()
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":    "ok",
+		down := 0
+		for _, res := range results {
+			if s, _ := res["status"].(string); s != "ok" {
+				down++
+			}
+		}
+
+		// A container healthcheck has to fail when the app is broken. Returning 200 with
+		// a body that says "degraded" would keep a dead container in the load balancer.
+		status, code := "ok", http.StatusOK
+		switch {
+		case down == len(results):
+			status, code = "down", http.StatusServiceUnavailable
+		case down > 0:
+			status = "degraded"
+		}
+
+		writeJSON(w, code, map[string]any{
+			"status":    status,
 			"service":   "gateway",
 			"upstreams": results,
 			"cache":     map[string]int{"hits": hits, "misses": misses, "size": size},
 		})
-	})
+	}
+
+	mux.HandleFunc("GET "+apiPrefix+"/health", health)
+
+	// Container platforms and load balancers probe /health by convention. Registering it
+	// explicitly also stops the SPA catch-all below from swallowing it.
+	mux.HandleFunc("GET /health", health)
 
 	mux.HandleFunc("GET "+apiPrefix+"/routes", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"routes": routeTable()})
