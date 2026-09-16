@@ -20,6 +20,7 @@ import (
 	"github.com/cmb-lab/gateway/internal/config"
 	"github.com/cmb-lab/gateway/internal/middleware"
 	"github.com/cmb-lab/gateway/internal/proxy"
+	"github.com/cmb-lab/gateway/internal/static"
 )
 
 const apiPrefix = "/api/v1"
@@ -146,12 +147,20 @@ func main() {
 	mux.HandleFunc("POST "+apiPrefix+"/playground/compare/spectra", fwd.Forward(playground, apiPrefix+"/playground"))
 	mux.HandleFunc("POST "+apiPrefix+"/playground/compare/theory", fwd.Forward(playground, apiPrefix+"/playground"))
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error":  "not_found",
-			"detail": "unknown route; see " + apiPrefix + "/routes",
+	// With STATIC_DIR set, the gateway also serves the built frontend, so the whole app
+	// runs behind one port. Unset (local development) it stays API-only and Vite serves
+	// the app on its own port.
+	if spa := static.New(cfg.StaticDir); spa != nil {
+		mux.Handle("/", spa)
+		logger.Info("serving frontend", "dir", cfg.StaticDir)
+	} else {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error":  "not_found",
+				"detail": "unknown route; see " + apiPrefix + "/routes",
+			})
 		})
-	})
+	}
 
 	limiter := middleware.NewRateLimiter(cfg.RateLimit, cfg.RateBurst)
 	handler := middleware.Chain(mux,

@@ -31,6 +31,12 @@ type Config struct {
 
 	UpstreamTimeout time.Duration
 	AllowedOrigins  []string
+
+	// StaticDir, when set, makes the gateway also serve the built frontend from that
+	// directory. Container platforms expose a single port, so this collapses the
+	// frontend and the API onto one listener. Empty in local development, where Vite
+	// serves the frontend itself.
+	StaticDir string
 }
 
 func Load() Config {
@@ -49,6 +55,7 @@ func Load() Config {
 		RateLimit:       envFloat("GATEWAY_RATE_LIMIT", 20),
 		RateBurst:       envInt("GATEWAY_RATE_BURST", 40),
 		UpstreamTimeout: envDuration("GATEWAY_UPSTREAM_TIMEOUT", 120*time.Second),
+		StaticDir:       env("STATIC_DIR", ""),
 		AllowedOrigins: []string{
 			"http://localhost:5173",
 			"http://127.0.0.1:5173",

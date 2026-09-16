@@ -75,8 +75,9 @@ if ! command -v node >/dev/null || (( $(node -v | sed 's/v\([0-9]*\).*/\1/') < 2
   fi
 fi
 
-# Go, for the gateway. Distro packages lag, so fetch upstream.
-GO_VERSION="1.23.4"
+# Go, for the gateway. Distro packages lag, so fetch upstream. Must satisfy the `go`
+# directive in services/gateway/go.mod, or the build fails with "go.mod requires go >= ...".
+GO_VERSION="1.24.4"
 if ! command -v go >/dev/null || [[ "$(go version 2>/dev/null | awk '{print $3}')" != "go${GO_VERSION}" ]]; then
   log "Installing Go ${GO_VERSION}"
   GOARCH=$([[ "$(uname -m)" == "aarch64" ]] && echo arm64 || echo amd64)
