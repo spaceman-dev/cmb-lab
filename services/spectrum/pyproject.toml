@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmblab-spectrum"
+version = "0.1.0"
+description = "Angular power spectrum estimation service for cmb-lab"
+requires-python = ">=3.12,<3.14"
+dependencies = ["cmblab-core"]
+
+[project.scripts]
+cmblab-spectrum = "cmblab_spectrum.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cmblab_spectrum"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

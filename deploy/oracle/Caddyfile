@@ -1,0 +1,48 @@
+# cmb-lab reverse proxy.
+#
+# Serves the built React frontend as static files and forwards /api/v1/* to the Go
+# gateway. {{DOMAIN}} is substituted by bootstrap.sh — either a real hostname (Caddy then
+# provisions a Let's Encrypt certificate automatically) or ":80" for plain HTTP on the
+# instance IP.
+
+{{DOMAIN}} {
+	encode zstd gzip
+
+	# API traffic goes to the Go gateway, which fans out to the Python services.
+	handle /api/* {
+		reverse_proxy localhost:8080 {
+			# MCMC and Monte Carlo jobs are started async, but the initial request can
+			# still take a while on a cold CAMB cache.
+			transport http {
+				response_header_timeout 120s
+			}
+		}
+	}
+
+	handle /health {
+		reverse_proxy localhost:8080
+	}
+
+	# Everything else is the single-page app.
+	handle {
+		root * /opt/cmb-lab/web/dist
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Hashed asset filenames, so they can be cached hard.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	log {
+		output file /var/log/caddy/cmb-lab.log
+		format console
+	}
+}

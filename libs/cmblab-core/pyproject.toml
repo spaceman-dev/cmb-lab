@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmblab-core"
+version = "0.1.0"
+description = "Shared domain models, storage clients, and HEALPix utilities for cmb-lab"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # --- scientific core ---
+    "numpy>=1.26,<3",
+    "scipy>=1.11",
+    "astropy>=6.0",
+    "healpy>=1.17",
+    "matplotlib>=3.8",
+    # --- service framework ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    # --- storage ---
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "redis>=5.0",
+    "boto3>=1.35",
+    # --- jobs + io ---
+    "celery>=5.4",
+    "httpx>=0.27",
+    "structlog>=24.4",
+    # Verify TLS against the OS trust store: certifi's bundle is missing ESA's CA chain.
+    "truststore>=0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cmblab_core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+markers = [
+    "physics: validation gates that assert published physical values",
+    "slow: takes more than a few seconds",
+    "network: requires internet access",
+]

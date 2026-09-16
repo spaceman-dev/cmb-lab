@@ -1,0 +1,45 @@
+[Unit]
+Description=cmb-lab %i service
+Documentation=https://github.com/spaceman-dev/cmb-lab/blob/main/docs/services/README.md
+PartOf=cmblab.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cmblab
+Group=cmblab
+WorkingDirectory=/opt/cmb-lab
+
+# .env carries GEMINI_API_KEY and friends. Missing file is fine (leading '-'), because the
+# app is fully functional without a key.
+EnvironmentFile=-/opt/cmb-lab/.env
+Environment=DATA_DIR=/opt/cmb-lab/data
+Environment=PYTHONUNBUFFERED=1
+
+# Scientific Python spawns a thread pool per process by default. With eight services on a
+# 4-core box that is heavy oversubscription, so pin each to one thread and let the process
+# pools inside cosmology/anomaly do the real parallelism.
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+Environment=VECLIB_MAXIMUM_THREADS=1
+
+ExecStart=/opt/cmb-lab/deploy/oracle/run-service.sh %i
+
+Restart=on-failure
+RestartSec=5s
+
+# Only Caddy is public; services bind to loopback and never need to be reachable directly.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/cmb-lab/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=cmblab.target

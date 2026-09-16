@@ -1,0 +1,18 @@
+[Unit]
+Description=cmb-lab (all services)
+Documentation=https://github.com/spaceman-dev/cmb-lab
+After=network-online.target
+
+# Starting or stopping the target does the same to every service below.
+Wants=cmblab@catalog.service
+Wants=cmblab@spectrum.service
+Wants=cmblab@cosmology.service
+Wants=cmblab@anomaly.service
+Wants=cmblab@skymap.service
+Wants=cmblab@tutor.service
+Wants=cmblab@chat.service
+Wants=cmblab@playground.service
+Wants=cmblab-gateway.service
+
+[Install]
+WantedBy=multi-user.target

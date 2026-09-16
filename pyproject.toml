@@ -1,0 +1,25 @@
+[tool.pytest.ini_options]
+testpaths = ["libs", "services"]
+markers = [
+    "physics: validation gates that assert published physical values",
+    "slow: takes more than a few seconds",
+    "network: requires internet access",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", ".toolchain", "data", "web", "services/gateway"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["E501"]
+# Lesson and glossary text is prose, not code; wrapping it to 100 columns hurts readability.
+"**/cmblab_tutor/content.py" = ["E501"]
+"**/cmblab_tutor/glossary.py" = ["E501"]
+"**/cmblab_playground/experiments.py" = ["E501"]

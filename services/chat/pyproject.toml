@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmblab-chat"
+version = "0.1.0"
+description = "cmb-lab chat service"
+requires-python = ">=3.12,<3.14"
+dependencies = ["cmblab-core", "cmblab-tutor"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cmblab_chat"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

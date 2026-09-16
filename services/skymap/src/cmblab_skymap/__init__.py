@@ -1,0 +1,1 @@
+"""cmb-lab skymap service."""

@@ -1,0 +1,27 @@
+[Unit]
+Description=cmb-lab API gateway
+PartOf=cmblab.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cmblab
+Group=cmblab
+WorkingDirectory=/opt/cmb-lab
+EnvironmentFile=-/opt/cmb-lab/.env
+Environment=GATEWAY_PORT=8080
+ExecStart=/opt/cmb-lab/services/gateway/bin/gateway
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=cmblab.target
