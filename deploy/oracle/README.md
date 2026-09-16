@@ -9,6 +9,34 @@ scripts do that for you.
 
 ---
 
+## The short version
+
+Open **Cloud Shell** — the `>_` icon in the OCI console's top bar. The CLI is already
+authenticated there, so there is nothing to configure.
+
+```bash
+git clone https://github.com/spaceman-dev/cmb-lab.git && cd cmb-lab
+
+./deploy/oracle/setup-network.sh     # VCN + public subnet + ports 22/80/443
+./deploy/oracle/retry-create.sh      # loops until Ampere capacity frees up
+```
+
+When it reports an IP, SSH in and run the bootstrap:
+
+```bash
+ssh -i ~/.ssh/oracle-cmblab opc@<IP>
+sudo dnf install -y git
+git clone https://github.com/spaceman-dev/cmb-lab.git /tmp/cmb-lab
+sudo /tmp/cmb-lab/deploy/oracle/bootstrap.sh
+```
+
+**Order matters.** The network has to exist first — an instance created on a private subnet
+cannot be given a public IP, and that is not fixable afterwards.
+
+The rest of this document explains each step and what to do when it goes wrong.
+
+---
+
 ## 1. Create the instance
 
 In the OCI Console → **Compute → Instances → Create instance**:
@@ -93,28 +121,44 @@ ssh -i ~/.ssh/oracle-cmblab ubuntu@<INSTANCE_PUBLIC_IP>   # Ubuntu
 
 The default user is **`opc`** on Oracle Linux and **`ubuntu`** on Ubuntu images.
 
-## 3. Open the ports — **both** layers
+## 3. Networking: you need a **public** subnet
 
-Oracle blocks traffic in two independent places. Missing either one produces the same
-symptom: the port simply times out.
+If the console greys out the public IP option and says:
 
-### 3a. VCN security list (the cloud firewall)
+> *You must select a public subnet to assign a public IPv4 address*
 
-Console → **Networking → Virtual Cloud Networks →** your VCN **→ Security Lists →** default
-→ **Add Ingress Rules**:
+— then the subnet OCI auto-created for you is **private**, and no checkbox will fix it. A
+VNIC in a private subnet cannot hold a public IP.
 
-| Source CIDR | Protocol | Destination port | Purpose |
-| :-- | :-- | :-- | :-- |
-| `0.0.0.0/0` | TCP | 80 | HTTP, and Let's Encrypt validation |
-| `0.0.0.0/0` | TCP | 443 | HTTPS |
+A public subnet needs three things that must all agree: an Internet Gateway, a route table
+sending `0.0.0.0/0` to it, and `prohibit-public-ip-on-vnic = false`.
 
-### 3b. The instance's own firewall
+The script builds all of it, plus the security list rules:
 
-**This is the step people miss.** OCI images filter traffic locally as well, regardless of
-what the security list says — `firewalld` on Oracle Linux, a baked-in iptables `REJECT`
-rule on Ubuntu.
+```bash
+./deploy/oracle/setup-network.sh
+```
 
-`bootstrap.sh` handles this automatically. Manually:
+Or in the console: **Networking → Virtual Cloud Networks → Create VCN → "VCN with Internet
+Connectivity"**, which produces a public subnet alongside a private one. Select the
+**public** one when creating the instance.
+
+### The two firewall layers
+
+Oracle filters traffic in two independent places. Missing either gives the same symptom:
+the port simply times out.
+
+**3a. VCN security list** (cloud-side) — created by `setup-network.sh`. Manually:
+Networking → VCN → Security Lists → default → **Add Ingress Rules**:
+
+| Source CIDR | Protocol | Destination port |
+| :-- | :-- | :-- |
+| `0.0.0.0/0` | TCP | 22 |
+| `0.0.0.0/0` | TCP | 80 |
+| `0.0.0.0/0` | TCP | 443 |
+
+**3b. The instance's own firewall** — handled by `bootstrap.sh`. **This is the step people
+miss.** OCI images filter locally too, regardless of the security list.
 
 ```bash
 # Oracle Linux (firewalld)
@@ -131,8 +175,8 @@ sudo netfilter-persistent save
 Note `-I INPUT 6` (insert) rather than `-A INPUT` (append) — appending puts the rule *after*
 the catch-all REJECT, where it has no effect.
 
-Oracle Linux also runs SELinux in enforcing mode, which blocks Caddy from proxying to the
-local gateway. The script sets `httpd_can_network_connect`; manually it is:
+Oracle Linux also runs SELinux enforcing, which blocks Caddy from proxying to the local
+gateway. That surfaces as a **502, not a timeout**:
 
 ```bash
 sudo setsebool -P httpd_can_network_connect 1

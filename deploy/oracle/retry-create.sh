@@ -77,9 +77,11 @@ if [[ -z "${SUBNET_OCID:-}" ]]; then
 fi
 [[ -n "${SUBNET_OCID:-}" && "$SUBNET_OCID" != "null" ]] || die "No public subnet found.
   Every existing subnet forbids public IPs, so an instance there would be unreachable.
-  In the console: Networking > Virtual Cloud Networks > Create VCN > 'VCN with Internet
-  Connectivity'. That wizard makes a public subnet with a gateway and route table.
-  Then re-run, or pass SUBNET_OCID=ocid1.subnet.oc1..xxxxx"
+  This is also what causes the console warning:
+      'You must select a public subnet to assign a public IPv4 address'
+
+  Create one:  ./deploy/oracle/setup-network.sh
+  Or pass:     export SUBNET_OCID=ocid1.subnet.oc1..xxxxx"
 
 # ── SSH key ─────────────────────────────────────────────────────────────────────────────
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
