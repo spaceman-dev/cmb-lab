@@ -21,6 +21,7 @@ import contextlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -31,6 +32,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
@@ -770,6 +772,45 @@ def _image_exists() -> bool:
     )
 
 
+# Docker reports local time with an offset ("...T13:08:31.120016642+05:30"), not UTC, and
+# with nanosecond precision that fromisoformat rejects. Both have to be handled or the
+# comparison below is wrong by the size of the timezone offset.
+_DOCKER_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$")
+
+
+def _image_built_at() -> float | None:
+    out = subprocess.run(
+        ["docker", "image", "inspect", "-f", "{{.Created}}", IMAGE],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        return None
+    matched = _DOCKER_TIME.match(out.stdout.strip())
+    if not matched:
+        return None
+    base, fraction, offset = matched.groups()
+    fraction = (fraction or "")[:7]  # fromisoformat accepts microseconds at most
+    offset = (offset or "+00:00").replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(f"{base}{fraction}{offset}").timestamp()
+    except ValueError:
+        return None
+
+
+def _image_is_stale() -> bool:
+    """True when the recipe changed after the image was built.
+
+    Without this, `git pull` followed by `up` silently reuses the old image, so a fix to
+    the Dockerfile or the entrypoint appears to have done nothing.
+    """
+    built = _image_built_at()
+    if built is None:
+        return False
+    watched = (ROOT / "Dockerfile", ROOT / "deploy" / "docker" / "start.sh")
+    return any(f.is_file() and f.stat().st_mtime > built for f in watched)
+
+
 def docker_build(_args: argparse.Namespace) -> int:
     info(f"building the {IMAGE} image (first run takes a while — CAMB compiles Fortran)")
     subprocess.run(["docker", "build", "-t", IMAGE, "."], cwd=ROOT, check=True)
@@ -778,6 +819,9 @@ def docker_build(_args: argparse.Namespace) -> int:
 
 def docker_up(args: argparse.Namespace) -> int:
     if not _image_exists() or getattr(args, "rebuild", False):
+        docker_build(args)
+    elif _image_is_stale():
+        info("the Dockerfile or entrypoint changed since the image was built")
         docker_build(args)
 
     if _container_state() != "absent":
@@ -898,6 +942,7 @@ def main() -> int:
 
     boot = sub.add_parser("bootstrap", help="one command: install everything, then start")
     boot.add_argument("--yes", action="store_true", help="do not prompt before installing")
+    boot.add_argument("--rebuild", action="store_true", help="docker: force an image rebuild")
     sub.add_parser("setup", help="create the venv and install every package")
     sub.add_parser("toolchain", help="download the Go toolchain for this OS/arch")
     sub.add_parser("node", help="download the Node toolchain for this OS/arch")
