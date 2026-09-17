@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -95,80 +96,108 @@ func main() {
 	// explicitly also stops the SPA catch-all below from swallowing it.
 	mux.HandleFunc("GET /health", health)
 
+	// Routes are data, not code. The mux registration and the /routes listing are both
+	// generated from this one table, so what the gateway publishes cannot drift from what
+	// it actually serves.
+	var routes []route
+	add := func(svc proxy.Service, strip string, specs ...string) {
+		for _, spec := range specs {
+			method, path, ok := strings.Cut(spec, " ")
+			if !ok {
+				panic(`route spec must be "METHOD /path", got: ` + spec)
+			}
+			routes = append(routes, route{method: method, path: path, svc: svc, strip: strip})
+		}
+	}
+
+	add(catalog, apiPrefix,
+		"GET /datasets",
+		"GET /datasets/{slug}/products",
+		"GET /datasets/{slug}/products/{product}",
+		"GET /maps/{dataset}/{product}/stats",
+		"GET /maps/{dataset}/{product}/preview.png",
+	)
+
+	add(spectrum, apiPrefix,
+		"GET /maps",
+		"POST /spectra/cross",
+		"POST /spectra/auto",
+		"GET /spectra/{id}",
+		"GET /references",
+		"GET /references/{slug}",
+		"GET /parameters/planck2018",
+	)
+
+	// G5
+	add(cosmology, apiPrefix,
+		"GET /parameters",
+		"POST /theory",
+		"POST /inference/jobs",
+		"GET /inference/jobs",
+		"GET /inference/jobs/{id}",
+		"GET /inference/jobs/{id}/corner",
+		"POST /scan",
+		"POST /model",
+		"GET /tension/H0",
+	)
+
+	// G6
+	add(anomaly, apiPrefix+"/anomaly",
+		"GET /anomaly/statistics",
+		"POST /anomaly/measure",
+		"POST /anomaly/jobs",
+		"GET /anomaly/jobs",
+		"GET /anomaly/jobs/{id}",
+		"POST /anomaly/calibrate",
+	)
+
+	add(skymap, apiPrefix+"/skymap",
+		"GET /skymap/projections",
+		"GET /skymap/render/{dataset}/{product}",
+		"GET /skymap/preset/{dataset}/{product}/{preset}",
+		"GET /skymap/sphere/{dataset}/{product}",
+		"GET /skymap/profile/{dataset}/{product}",
+		"GET /skymap/stats/{dataset}/{product}",
+	)
+
+	add(tutor, apiPrefix+"/tutor",
+		"GET /tutor/curriculum",
+		"GET /tutor/lessons/{id}",
+		"GET /tutor/lessons/{id}/sections/{sid}",
+		"GET /tutor/audio/{id}/{sid}",
+		"GET /tutor/audio/clip/{id}",
+		"GET /tutor/audio/voices",
+		"POST /tutor/audio/speak",
+		"GET /tutor/glossary",
+		"GET /tutor/glossary/{term}",
+	)
+
+	add(chat, apiPrefix+"/chat",
+		"GET /chat/capabilities",
+		"GET /chat/topics",
+		"POST /chat/chat",
+		"GET /chat/sessions/{id}",
+		"POST /chat/sessions/{id}/reset",
+	)
+
+	add(playground, apiPrefix+"/playground",
+		"GET /playground/knobs",
+		"GET /playground/experiments",
+		"GET /playground/experiments/{id}",
+		"POST /playground/experiments/{id}/run",
+		"POST /playground/spectrum",
+		"POST /playground/theory",
+		"POST /playground/compare/spectra",
+		"POST /playground/compare/theory",
+	)
+
+	for _, rt := range routes {
+		mux.HandleFunc(rt.method+" "+apiPrefix+rt.path, fwd.Forward(rt.svc, rt.strip))
+	}
+
 	mux.HandleFunc("GET "+apiPrefix+"/routes", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"routes": routeTable()})
+		writeJSON(w, http.StatusOK, map[string]any{"routes": routeTable(routes)})
 	})
-
-	// --- catalog ----------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/datasets", fwd.Forward(catalog, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/datasets/{slug}/products", fwd.Forward(catalog, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/datasets/{slug}/products/{product}", fwd.Forward(catalog, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/maps/{dataset}/{product}/stats", fwd.Forward(catalog, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/maps/{dataset}/{product}/preview.png", fwd.Forward(catalog, apiPrefix))
-
-	// --- spectrum ---------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/maps", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/spectra/cross", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/spectra/auto", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/spectra/{id}", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/references", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/references/{slug}", fwd.Forward(spectrum, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/parameters/planck2018", fwd.Forward(spectrum, apiPrefix))
-
-	// --- cosmology (G5) ---------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/parameters", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/theory", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/inference/jobs", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/inference/jobs", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/inference/jobs/{id}", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/inference/jobs/{id}/corner", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/scan", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("POST "+apiPrefix+"/model", fwd.Forward(cosmology, apiPrefix))
-	mux.HandleFunc("GET "+apiPrefix+"/tension/H0", fwd.Forward(cosmology, apiPrefix))
-
-	// --- anomaly (G6) -----------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/anomaly/statistics", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-	mux.HandleFunc("POST "+apiPrefix+"/anomaly/measure", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-	mux.HandleFunc("POST "+apiPrefix+"/anomaly/jobs", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-	mux.HandleFunc("GET "+apiPrefix+"/anomaly/jobs", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-	mux.HandleFunc("GET "+apiPrefix+"/anomaly/jobs/{id}", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-	mux.HandleFunc("POST "+apiPrefix+"/anomaly/calibrate", fwd.Forward(anomaly, apiPrefix+"/anomaly"))
-
-	// --- skymap -----------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/projections", fwd.Forward(skymap, apiPrefix+"/skymap"))
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/render/{dataset}/{product}", fwd.Forward(skymap, apiPrefix+"/skymap"))
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/preset/{dataset}/{product}/{preset}", fwd.Forward(skymap, apiPrefix+"/skymap"))
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/sphere/{dataset}/{product}", fwd.Forward(skymap, apiPrefix+"/skymap"))
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/profile/{dataset}/{product}", fwd.Forward(skymap, apiPrefix+"/skymap"))
-	mux.HandleFunc("GET "+apiPrefix+"/skymap/stats/{dataset}/{product}", fwd.Forward(skymap, apiPrefix+"/skymap"))
-
-	// --- tutor ------------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/curriculum", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/lessons/{id}", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/lessons/{id}/sections/{sid}", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/audio/{id}/{sid}", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/audio/clip/{id}", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/audio/voices", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("POST "+apiPrefix+"/tutor/audio/speak", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/glossary", fwd.Forward(tutor, apiPrefix+"/tutor"))
-	mux.HandleFunc("GET "+apiPrefix+"/tutor/glossary/{term}", fwd.Forward(tutor, apiPrefix+"/tutor"))
-
-	// --- chat -------------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/chat/capabilities", fwd.Forward(chat, apiPrefix+"/chat"))
-	mux.HandleFunc("GET "+apiPrefix+"/chat/topics", fwd.Forward(chat, apiPrefix+"/chat"))
-	mux.HandleFunc("POST "+apiPrefix+"/chat/chat", fwd.Forward(chat, apiPrefix+"/chat"))
-	mux.HandleFunc("GET "+apiPrefix+"/chat/sessions/{id}", fwd.Forward(chat, apiPrefix+"/chat"))
-	mux.HandleFunc("POST "+apiPrefix+"/chat/sessions/{id}/reset", fwd.Forward(chat, apiPrefix+"/chat"))
-
-	// --- playground -------------------------------------------------------------
-	mux.HandleFunc("GET "+apiPrefix+"/playground/knobs", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("GET "+apiPrefix+"/playground/experiments", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("GET "+apiPrefix+"/playground/experiments/{id}", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("POST "+apiPrefix+"/playground/experiments/{id}/run", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("POST "+apiPrefix+"/playground/spectrum", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("POST "+apiPrefix+"/playground/theory", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("POST "+apiPrefix+"/playground/compare/spectra", fwd.Forward(playground, apiPrefix+"/playground"))
-	mux.HandleFunc("POST "+apiPrefix+"/playground/compare/theory", fwd.Forward(playground, apiPrefix+"/playground"))
 
 	// With STATIC_DIR set, the gateway also serves the built frontend, so the whole app
 	// runs behind one port. Unset (local development) it stays API-only and Vite serves
@@ -223,20 +252,27 @@ func main() {
 	}
 }
 
-func routeTable() []map[string]string {
-	return []map[string]string{
+// route is both registered on the mux and reported by /routes.
+type route struct {
+	method string
+	path   string // relative to apiPrefix
+	svc    proxy.Service
+	strip  string // prefix removed before the request is forwarded upstream
+}
+
+func routeTable(routes []route) []map[string]string {
+	table := []map[string]string{
 		{"method": "GET", "path": apiPrefix + "/health", "upstream": "gateway"},
-		{"method": "GET", "path": apiPrefix + "/datasets", "upstream": "catalog"},
-		{"method": "GET", "path": apiPrefix + "/datasets/{slug}/products", "upstream": "catalog"},
-		{"method": "GET", "path": apiPrefix + "/maps", "upstream": "spectrum"},
-		{"method": "GET", "path": apiPrefix + "/maps/{dataset}/{product}/stats", "upstream": "catalog"},
-		{"method": "GET", "path": apiPrefix + "/maps/{dataset}/{product}/preview.png", "upstream": "catalog"},
-		{"method": "POST", "path": apiPrefix + "/spectra/cross", "upstream": "spectrum"},
-		{"method": "POST", "path": apiPrefix + "/spectra/auto", "upstream": "spectrum"},
-		{"method": "GET", "path": apiPrefix + "/references", "upstream": "spectrum"},
-		{"method": "GET", "path": apiPrefix + "/references/{slug}", "upstream": "spectrum"},
-		{"method": "GET", "path": apiPrefix + "/parameters/planck2018", "upstream": "spectrum"},
+		{"method": "GET", "path": apiPrefix + "/routes", "upstream": "gateway"},
 	}
+	for _, rt := range routes {
+		table = append(table, map[string]string{
+			"method":   rt.method,
+			"path":     apiPrefix + rt.path,
+			"upstream": rt.svc.Name,
+		})
+	}
+	return table
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
