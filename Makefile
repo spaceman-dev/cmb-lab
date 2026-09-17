@@ -42,6 +42,10 @@ setup: .env $(VENV) ## Full dev setup: venv + editable installs
 bootstrap: ## One command: install everything, fetch the data, and start
 	@$(PYTHON) scripts/dev.py bootstrap
 
+.PHONY: clean-all
+clean-all: ## Stop everything and remove what bootstrap installed
+	@$(PYTHON) scripts/dev.py clean
+
 .PHONY: toolchain
 toolchain: ## Download the Go toolchain into .toolchain (no sudo required)
 	@$(PYTHON) scripts/dev.py toolchain

@@ -632,6 +632,138 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     return rc
 
 
+# --------------------------------------------------------------------------- clean
+
+_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    (".venv", "Python virtualenv"),
+    (".toolchain", "vendored Go and Node"),
+    ("web/node_modules", "frontend dependencies"),
+    ("web/dist", "built frontend"),
+    ("services/gateway/bin", "gateway binary"),
+    ("data/logs", "service logs"),
+    ("data/run", "pid files"),
+)
+_CACHES = (".pytest_cache", ".ruff_cache", ".mypy_cache")
+
+
+def _human(size: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _tree_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file() and not child.is_symlink():
+            with contextlib.suppress(OSError):
+                total += child.stat().st_size
+    return total
+
+
+def _assert_inside_repo(path: Path) -> None:
+    """Never delete anything outside the checkout, whatever the input said."""
+    root = ROOT.resolve()
+    resolved = path.resolve()
+    if resolved == root or root not in resolved.parents:
+        die(f"refusing to remove {resolved}: outside the repository")
+
+
+def _volume_exists() -> bool:
+    return (
+        subprocess.run(
+            ["docker", "volume", "inspect", DATA_VOLUME], capture_output=True
+        ).returncode
+        == 0
+    )
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    """Stop everything and remove what this project created."""
+    wipe_data = args.data or args.all
+    wipe_docker = args.docker or args.all
+
+    paths: list[tuple[Path, str]] = []
+    named = [t for t in _ARTIFACTS if not (wipe_data and t[0].startswith("data/"))]
+    if wipe_data:
+        named.append(("data", "downloaded archive data"))
+    for rel, label in named:
+        candidate = ROOT / rel
+        if candidate.exists():
+            paths.append((candidate, label))
+    for rel in _CACHES:
+        candidate = ROOT / rel
+        if candidate.exists():
+            paths.append((candidate, "tool cache"))
+    for base in (ROOT / "libs", ROOT / "services", ROOT / "scripts"):
+        if base.is_dir():
+            paths += [(p, "bytecode cache") for p in base.rglob("__pycache__")]
+            paths += [(p, "egg-info") for p in base.rglob("*.egg-info")]
+
+    objects: list[tuple[str, str]] = []
+    if wipe_docker and _docker():
+        if _container_state() != "absent":
+            objects.append(("container", CONTAINER))
+        if _image_exists():
+            objects.append(("image", IMAGE))
+        if _volume_exists():
+            objects.append(("volume", DATA_VOLUME))
+
+    if not paths and not objects:
+        info("nothing to clean")
+        return 0
+
+    print("This will remove:\n")
+    reclaimed = 0
+    for path, label in paths:
+        size = _tree_size(path)
+        reclaimed += size
+        print(f"  {_human(size):>9}  {path.relative_to(ROOT)}  {DIM}{label}{RESET}")
+    for kind, name in objects:
+        print(f"  {'':>9}  docker {kind} {name}")
+    suffix = ", plus the Docker objects above" if objects else ""
+    print(f"\n  {_human(reclaimed)} reclaimed from disk{suffix}")
+
+    if not wipe_data and (ROOT / "data").exists():
+        print(f"  {DIM}keeping the archive data; add --data to remove it too{RESET}")
+    if objects:
+        print(f"  {DIM}only objects named cmb-lab are touched{RESET}")
+
+    if args.dry_run:
+        print("\n  dry run, nothing removed")
+        return 0
+    if not _ask("\n  Remove these?", args.yes):
+        print("  cancelled")
+        return 1
+
+    cmd_down(args, quiet=True)
+
+    for path, _ in paths:
+        _assert_inside_repo(path)
+        with contextlib.suppress(OSError):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+
+    for kind, name in objects:
+        command = {
+            "container": ["docker", "rm", "-f", name],
+            "image": ["docker", "rmi", "-f", name],
+            "volume": ["docker", "volume", "rm", "-f", name],
+        }[kind]
+        subprocess.run(command, capture_output=True)
+
+    print(f"\n  {GREEN}done{RESET} — {_human(reclaimed)} freed")
+    print(f"  {DIM}your .env and the git checkout are untouched; "
+          f"run `bootstrap` to set it all up again{RESET}")
+    return 0
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     """Report whether every prerequisite for this platform is present."""
     print(
@@ -958,12 +1090,21 @@ def main() -> int:
     logs.add_argument("service", nargs="?", choices=[*SERVICES, "gateway"])
     sub.add_parser("doctor", help="check this machine has what it needs")
 
+    clean = sub.add_parser("clean", help="stop everything and remove what was installed")
+    clean.add_argument("--data", action="store_true", help="also the archive data")
+    clean.add_argument("--docker", action="store_true", help="also image, container, volume")
+    clean.add_argument("--all", action="store_true", help="everything, data and Docker too")
+    clean.add_argument("--dry-run", action="store_true", help="list it, remove nothing")
+    clean.add_argument("--yes", action="store_true", help="do not prompt")
+
     args = parser.parse_args()
     command = args.command or "status"
 
-    # doctor always reports on the machine you typed the command on.
+    # doctor and clean always act on the machine you typed the command on.
     if command == "doctor":
         return cmd_doctor(args)
+    if command == "clean":
+        return cmd_clean(args)
 
     backend = _choose_backend(args.backend, command)
     try:

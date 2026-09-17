@@ -1,0 +1,44 @@
+# Keep the build context small.
+#
+# Without this Docker uploads the entire working tree to the daemon before the build even
+# starts — .venv, .toolchain, the downloaded archive data and node_modules come to about
+# 1.4 GB, none of which the build uses. On Windows, where the context crosses the WSL2
+# file-sharing boundary, that upload dominates the build time.
+
+.git
+.github
+.gitignore
+.gitattributes
+
+# Secrets must never enter the build context.
+.env
+.env.*
+!.env.example
+
+# Recreated inside the image.
+.venv
+.toolchain
+**/node_modules
+web/dist
+services/gateway/bin
+
+# Downloaded at first start, or baked in by the build itself.
+data
+
+# Caches and build litter.
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.DS_Store
+
+# Not used by any build stage.
+docs
+deploy/oracle
+scripts
+infra
+*.md
+LICENSE
+Makefile

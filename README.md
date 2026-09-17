@@ -148,6 +148,7 @@ python scripts/dev.py doctor     # what does this machine still need?
 python scripts/dev.py status     # health table for all 9 services
 python scripts/dev.py logs chat  # follow one service
 python scripts/dev.py down       # stop everything
+python scripts/dev.py clean      # stop, and remove what was installed
 ```
 
 Everything is driven by [scripts/dev.py](scripts/dev.py), which behaves identically on every
@@ -156,6 +157,30 @@ implementation to keep correct. `make` is a convenience, never a requirement.
 
 Logs land in `data/logs/`. Individual steps are available if you would rather not run
 everything at once: `setup`, `toolchain`, `node`, `build`, `data`, `up`.
+
+### Removing it again
+
+`bootstrap` puts about 1 GB on disk, plus a 2 GB Docker image if you used that route.
+`clean` takes it all back out:
+
+```bash
+python scripts/dev.py clean             # build artifacts, keeps the downloaded data
+python scripts/dev.py clean --data      # the ~170 MB of archive data too
+python scripts/dev.py clean --all       # everything, including the Docker image and volume
+python scripts/dev.py clean --dry-run   # show what would go, remove nothing
+```
+
+It stops the services first, prints exactly what it will remove with sizes, and asks before
+doing anything. Three things it will never touch:
+
+- **your `.env`**, so an API key you added survives
+- **anything outside the repository** — every path is checked, and `..`, `~` or an absolute
+  path are refused
+- **Docker objects it did not create.** Only the `cmb-lab` container, image and volume are
+  removed by name. There is no `docker system prune`, so other containers on your machine
+  are left alone.
+
+Afterwards the git checkout is exactly as cloned, and `bootstrap` sets it all up again.
 
 ### Windows
 
@@ -175,6 +200,7 @@ or Go on Windows — only Docker.
 .\scripts\dev.cmd status     # is it up?
 .\scripts\dev.cmd logs       # follow the logs
 .\scripts\dev.cmd down       # stop it
+.\scripts\dev.cmd clean --all  # remove the image, volume and everything else
 .\scripts\dev.cmd bootstrap -Backend wsl   # use WSL instead of Docker
 ```
 
