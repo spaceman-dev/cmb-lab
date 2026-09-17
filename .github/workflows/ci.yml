@@ -58,3 +58,37 @@ jobs:
       - run: npm --prefix web ci
       - run: npm --prefix web run typecheck
       - run: npm --prefix web run build
+
+  # healpy ships no Windows build, so the services themselves cannot be installed here.
+  # What must keep working is the Windows *entry point*: the PowerShell wrapper has to
+  # parse, dev.py has to run, and it has to pick Docker/WSL instead of failing natively.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: dev.ps1 parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/dev.ps1), [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host "dev.ps1 parses cleanly"
+
+      - name: dev.py runs on Windows
+        run: python scripts/dev.py doctor
+
+      - name: native backend is refused on Windows
+        shell: pwsh
+        run: |
+          python scripts/dev.py --backend native status
+          if ($LASTEXITCODE -eq 0) { Write-Error "native should be refused on Windows"; exit 1 }
+          Write-Host "correctly refused"
+
+      - name: the PowerShell wrapper reaches dev.py
+        shell: pwsh
+        run: .\scripts\dev.ps1 doctor

@@ -504,6 +504,10 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         "optional — macOS only; elsewhere the browser speaks",
     ))
 
+    if WINDOWS:
+        rows.append(("Docker", _docker_ready(), "default backend on Windows"))
+        rows.append(("WSL", _wsl_distro() is not None, f"distro: {_wsl_distro() or 'none'}"))
+
     print()
     for label, ok, note in rows:
         mark = f"{GREEN}yes{RESET}" if ok else f"{RED}no {RESET}"
@@ -511,11 +515,214 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     if WINDOWS:
         print(
-            f"\n{RED}Native Windows will not work.{RESET} healpy ships no Windows build, and\n"
-            "spectrum, anomaly, skymap and tutor all need it. Use WSL2 (wsl --install -d Ubuntu)\n"
-            "or Docker (docker build -t cmb-lab . && docker run -p 7860:7860 cmb-lab)."
+            f"\n{DIM}healpy has no Windows build, so spectrum, anomaly, skymap and tutor\n"
+            f"cannot run natively. This script runs them in Docker or WSL instead.{RESET}"
         )
+        try:
+            print(f"  backend that would be used: {_choose_backend(None, 'status')}")
+        except SystemExit:
+            print(f"  {RED}no usable backend{RESET} — install Docker Desktop or run: wsl --install")
     return 0
+
+
+# --------------------------------------------------------------------------- backends
+
+IMAGE = "cmb-lab:latest"
+CONTAINER = "cmb-lab"
+CONTAINER_PORT = 7860
+DATA_VOLUME = "cmb-lab-data"
+
+
+def _docker() -> str | None:
+    return shutil.which("docker")
+
+
+def _docker_ready() -> bool:
+    """Docker installed *and* the daemon actually up — Desktop is often not running."""
+    exe = _docker()
+    if not exe:
+        return False
+    return subprocess.run([exe, "info"], capture_output=True).returncode == 0
+
+
+def _wsl_distro() -> str | None:
+    """Name of the default WSL distribution, if any is installed."""
+    if not WINDOWS or not shutil.which("wsl"):
+        return None
+    out = subprocess.run(
+        ["wsl", "-l", "-q"], capture_output=True
+    ).stdout.decode("utf-16-le", errors="ignore")
+    for line in out.splitlines():
+        name = line.strip().strip("\x00")
+        if name:
+            return name
+    return None
+
+
+def _choose_backend(explicit: str | None, command: str) -> str:
+    choice = explicit or os.environ.get("CMBLAB_BACKEND") or "auto"
+
+    if choice == "auto":
+        if not WINDOWS:
+            return "native"
+        # healpy has no Windows build, so native is not an option here.
+        if _docker_ready():
+            return "docker"
+        if _wsl_distro():
+            return "wsl"
+        die(
+            "Windows needs either Docker or WSL, and neither was found.\n"
+            "  Docker (simplest): https://docs.docker.com/desktop/install/windows-install/\n"
+            "  WSL (fastest):     wsl --install -d Ubuntu\n"
+            "Then re-run this command."
+        )
+
+    if choice == "native" and WINDOWS:
+        die(
+            "--backend native cannot work on Windows: healpy ships no Windows build and\n"
+            "spectrum, anomaly, skymap and tutor all require it. Use --backend docker or wsl."
+        )
+    if choice not in ("native", "docker", "wsl"):
+        die(f"unknown backend {choice!r} (expected native, docker or wsl)")
+    if choice == "docker" and command in ("up", "build", "status", "logs") and not _docker_ready():
+        die(
+            "Docker is installed but the daemon is not responding.\n"
+            "Start Docker Desktop (or `colima start`) and try again."
+        )
+    return choice
+
+
+# ----------------------------------------------------------------- docker backend
+
+
+def _container_state() -> str:
+    """One of running, stopped, absent."""
+    out = subprocess.run(
+        ["docker", "ps", "-a", "--filter", f"name=^{CONTAINER}$", "--format", "{{.State}}"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return out or "absent"
+
+
+def _image_exists() -> bool:
+    # Must be an exact reference: `docker images -q cmb-lab` also matches cmb-lab:test,
+    # which would skip the build and then fail to run cmb-lab:latest.
+    return (
+        subprocess.run(
+            ["docker", "image", "inspect", IMAGE], capture_output=True
+        ).returncode
+        == 0
+    )
+
+
+def docker_build(_args: argparse.Namespace) -> int:
+    info(f"building the {IMAGE} image (first run takes a while — CAMB compiles Fortran)")
+    subprocess.run(["docker", "build", "-t", IMAGE, "."], cwd=ROOT, check=True)
+    return 0
+
+
+def docker_up(args: argparse.Namespace) -> int:
+    if not _image_exists() or getattr(args, "rebuild", False):
+        docker_build(args)
+
+    if _container_state() != "absent":
+        subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
+
+    cmd = [
+        "docker", "run", "-d",
+        "--name", CONTAINER,
+        "-p", f"{CONTAINER_PORT}:{CONTAINER_PORT}",
+        # Keeps the ~170 MB archive download across restarts.
+        "-v", f"{DATA_VOLUME}:/app/data",
+    ]
+    key = load_env().get("GEMINI_API_KEY")
+    if key:
+        cmd += ["-e", f"GEMINI_API_KEY={key}"]
+    cmd.append(IMAGE)
+
+    subprocess.run(cmd, check=True, capture_output=True)
+    info(f"container started, serving :{CONTAINER_PORT}")
+
+    print("waiting for services (first run also downloads ~170 MB of archive data)...")
+    deadline = time.time() + 1500
+    while time.time() < deadline:
+        if _container_state() == "exited":
+            subprocess.run(["docker", "logs", "--tail", "30", CONTAINER])
+            die("the container exited — see the log above")
+        if _healthy(CONTAINER_PORT, "/api/v1/health"):
+            print(f"\n  {GREEN}ready{RESET} -> http://localhost:{CONTAINER_PORT}")
+            return 0
+        time.sleep(5)
+    info(f"{RED}still not healthy{RESET} — check: docker logs {CONTAINER}")
+    return 1
+
+
+def docker_down(_args: argparse.Namespace) -> int:
+    if _container_state() == "absent":
+        info("nothing running")
+        return 0
+    subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True, check=False)
+    info("container stopped")
+    return 0
+
+
+def docker_status(_args: argparse.Namespace) -> int:
+    state = _container_state()
+    healthy = state == "running" and _healthy(CONTAINER_PORT, "/api/v1/health")
+    mark = f"{GREEN}ok{RESET}" if healthy else f"{RED}{state}{RESET}"
+    print(f"{'BACKEND':<12} {'PORT':<6} STATUS")
+    print(f"{'docker':<12} {CONTAINER_PORT:<6} {mark}")
+    if healthy:
+        print(f"\n  http://localhost:{CONTAINER_PORT}")
+    return 0 if healthy else 1
+
+
+def docker_logs(_args: argparse.Namespace) -> int:
+    if _container_state() == "absent":
+        die(f"no {CONTAINER} container — run: python scripts/dev.py up")
+    subprocess.run(["docker", "logs", "-f", "--tail", "50", CONTAINER], check=False)
+    return 0
+
+
+DOCKER_COMMANDS = {
+    "up": docker_up,
+    "down": docker_down,
+    "restart": lambda a: (docker_down(a), docker_up(a))[1],
+    "status": docker_status,
+    "logs": docker_logs,
+    "build": docker_build,
+    "setup": lambda _a: (info("nothing to set up — the image contains everything"), 0)[1],
+    "toolchain": lambda _a: (info("not needed: Go is built inside the image"), 0)[1],
+}
+
+
+# -------------------------------------------------------------------- wsl backend
+
+
+def _wsl_dispatch(command: str, args: argparse.Namespace) -> int:
+    """Re-run this same script inside WSL, so Linux runs the one implementation."""
+    distro = _wsl_distro()
+    if not distro:
+        die("no WSL distribution installed. Run: wsl --install -d Ubuntu")
+
+    path = subprocess.run(
+        ["wsl", "-d", distro, "wslpath", "-a", str(ROOT)],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not path:
+        die("could not translate the repo path into WSL")
+
+    extra = ""
+    if command == "logs" and getattr(args, "service", None):
+        extra = f" {args.service}"
+    elif command == "build" and getattr(args, "target", None):
+        extra = f" {args.target}"
+
+    inner = f"cd {path} && python3 scripts/dev.py {command}{extra}"
+    info(f"running in WSL ({distro})")
+    return subprocess.run(["wsl", "-d", distro, "--", "bash", "-lc", inner]).returncode
 
 
 # --------------------------------------------------------------------------- cli
@@ -523,7 +730,12 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="dev.py", description="Run cmb-lab on macOS, Linux or Windows."
+        prog="dev.py", description="Run cmb-lab on macOS, Linux, or Windows via Docker/WSL."
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "native", "docker", "wsl"],
+        help="where to run. Default: native on macOS/Linux, docker on Windows.",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -531,7 +743,8 @@ def main() -> int:
     sub.add_parser("toolchain", help="download the Go toolchain for this OS/arch")
     build = sub.add_parser("build", help="build the gateway binary and the frontend")
     build.add_argument("target", nargs="?", choices=["gateway", "web"])
-    sub.add_parser("up", help="start every service")
+    up = sub.add_parser("up", help="start every service")
+    up.add_argument("--rebuild", action="store_true", help="docker: rebuild the image first")
     sub.add_parser("down", help="stop every service")
     sub.add_parser("restart", help="stop then start")
     sub.add_parser("status", help="health-check every service")
@@ -540,25 +753,37 @@ def main() -> int:
     sub.add_parser("doctor", help="check this machine has what it needs")
 
     args = parser.parse_args()
-    handlers = {
-        "setup": cmd_setup,
-        "toolchain": cmd_toolchain,
-        "build": cmd_build,
-        "up": cmd_up,
-        "down": cmd_down,
-        "restart": cmd_restart,
-        "status": cmd_status,
-        "logs": cmd_logs,
-        "doctor": cmd_doctor,
-    }
-    handler = handlers.get(args.command or "status")
+    command = args.command or "status"
+
+    # doctor always reports on the machine you typed the command on.
+    if command == "doctor":
+        return cmd_doctor(args)
+
+    backend = _choose_backend(args.backend, command)
     try:
-        return handler(args) or 0  # type: ignore[misc]
+        if backend == "wsl":
+            return _wsl_dispatch(command, args)
+        if backend == "docker":
+            handler = DOCKER_COMMANDS.get(command)
+            if handler is None:
+                die(f"'{command}' is not available with the docker backend")
+            return handler(args) or 0
+
+        handlers = {
+            "setup": cmd_setup,
+            "toolchain": cmd_toolchain,
+            "build": cmd_build,
+            "up": cmd_up,
+            "down": cmd_down,
+            "restart": cmd_restart,
+            "status": cmd_status,
+            "logs": cmd_logs,
+        }
+        return handlers[command](args) or 0
     except subprocess.CalledProcessError as exc:
         die(f"command failed with exit code {exc.returncode}: {' '.join(map(str, exc.cmd))}")
     except KeyboardInterrupt:
         return 130
-    return 0
 
 
 if __name__ == "__main__":
