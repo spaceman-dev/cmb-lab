@@ -187,8 +187,12 @@ done
 
 # ── 5. Gateway and frontend ─────────────────────────────────────────────────────────────
 log "Building Go gateway"
+# Absolute path: sudo's secure_path is /sbin:/bin:/usr/sbin:/usr/bin on Oracle Linux, so
+# /usr/local/bin/go is not resolvable from a sudo'd shell.
+GO_BIN="$(command -v go || echo /usr/local/go/bin/go)"
+[[ -x "$GO_BIN" ]] || die "Go not found at $GO_BIN after installation."
 sudo -u "$APP_USER" env CGO_ENABLED=0 GOCACHE=/tmp/gocache "HOME=/home/$APP_USER" \
-  go build -C "$APP_DIR/services/gateway" -o bin/gateway ./cmd/gateway
+  "$GO_BIN" build -C "$APP_DIR/services/gateway" -o bin/gateway ./cmd/gateway
 
 log "Building frontend"
 NODE_OPTS=""
