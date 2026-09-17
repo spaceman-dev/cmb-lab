@@ -14,7 +14,8 @@ Browsing, the spectrum, sky maps and the lessons are quick; MCMC fits are slow.
 Run it [locally](#quick-start) for the full experience.</sub>
 
 [Quick start](#quick-start) · [What it does](#what-it-does) · [Use cases](#use-cases) ·
-[Using the site](#using-the-site) · [Deploy it](deploy/oracle/README.md) · [New here?](docs/onboarding.md)
+[Using the site](#using-the-site) · [**Textbook**](docs/textbook.md) · [Deploy it](deploy/oracle/README.md) ·
+[New here?](docs/onboarding.md)
 
 ![CMB power spectrum measured by cmb-lab](docs/images/spectrum.png)
 
@@ -177,7 +178,8 @@ watch the residual grow as ℓ². Eight guided experiments with questions and an
 
 ### Learn
 Six lessons, three depths, audio narration, and live values from *your* run spliced into the
-prose. Ask the assistant anything at any point.
+prose. Ask the assistant anything at any point. For the full derivations, read the
+[textbook](docs/textbook.md).
 
 </td></tr>
 </table>
@@ -260,8 +262,36 @@ Full story: [docs/why-cross-spectra.md](docs/why-cross-spectra.md).
 
 ## Documentation
 
+### 📖 The textbook
+
+**[docs/textbook.md](docs/textbook.md)** — a self-contained course on the physics behind this
+project, written for someone meeting it for the first time. It starts from high-school algebra
+and builds to a measured cosmology, so you should not need to open another book.
+
+The Friedmann equation is derived from high-school energy conservation, not general relativity.
+The acoustic peaks come out of a mass on a spring. Spherical harmonics are motivated from
+ordinary Fourier series. Every number in it — $\ell = 220$, $\chi^2/\mathrm{dof} = 0.57$,
+$f_\mathrm{sky} = 0.688$ — is one this project actually measured, and every place the method
+cuts a corner is flagged rather than hidden.
+
+8 parts · 33 chapters · 31 exercises with worked solutions · symbol and constant tables.
+
+| Part | Covers |
+| :-- | :-- |
+| 0 · Toolkit | Units, calculus, Fourier, $\chi^2$ — skip if familiar |
+| I · Expanding universe | Friedmann from Newton, thermal history, recombination |
+| II · Sound | The plasma as a harmonic oscillator; why the peak is at $\ell = 220$ |
+| III · Statistics of a sky | Spherical harmonics, $C_\ell$, $\mathcal{D}_\ell$, cosmic variance |
+| IV · The measurement | Masks, beams, noise, and the cross-spectrum trick |
+| V · Cosmology | CAMB, the six parameters, MCMC, the Hubble tension |
+| VI · Anomalies | The four claims, and the look-elsewhere effect |
+| VII · Pipeline | The six gates mapped to the physics |
+
+### Reference
+
 | Document | For |
 | :-- | :-- |
+| **[Textbook](docs/textbook.md)** | **The physics, from scratch.** Graduate course in one file |
 | **[Onboarding](docs/onboarding.md)** | **New here? Start with this.** Physics from zero, then the codebase |
 | [Oracle Cloud deployment](deploy/oracle/README.md) | Scripted deploy to Oracle's Always Free tier |
 | [Deployment options](docs/deployment.md) | Every hosting route, including free static hosting |
