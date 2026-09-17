@@ -62,16 +62,19 @@ SERVICES = {
 }
 GATEWAY_PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
 
+# Dependency order, not alphabetical: catalog needs ingest, cosmology needs spectrum,
+# anomaly/tutor/playground need cosmology, chat needs tutor. Installing out of order sends
+# pip to PyPI looking for a sibling that only exists locally, which fails on a fresh venv.
 PY_PACKAGES = [
-    "catalog",
     "ingest",
     "spectrum",
+    "skymap",
+    "catalog",
     "cosmology",
     "anomaly",
-    "skymap",
     "tutor",
-    "chat",
     "playground",
+    "chat",
 ]
 
 

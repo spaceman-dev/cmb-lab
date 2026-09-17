@@ -10,7 +10,10 @@ COMPOSE     := docker compose -f infra/docker-compose.yml --env-file .env
 GO          := $(CURDIR)/.toolchain/go/bin/go
 GOENV       := GOTOOLCHAIN=local GOPATH=$(CURDIR)/.toolchain/gopath CGO_ENABLED=0
 
-PY_SERVICES := catalog ingest spectrum cosmology anomaly skymap tutor chat playground
+# Dependency order, not alphabetical: catalog needs ingest, cosmology needs spectrum,
+# anomaly/tutor/playground need cosmology, chat needs tutor. Out of order, pip goes to
+# PyPI looking for a sibling that only exists locally and the install fails on a fresh venv.
+PY_SERVICES := ingest spectrum skymap catalog cosmology anomaly tutor playground chat
 
 # ---------------------------------------------------------------- help
 .PHONY: help
