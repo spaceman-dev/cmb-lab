@@ -194,6 +194,14 @@ GO_BIN="$(command -v go || echo /usr/local/go/bin/go)"
 sudo -u "$APP_USER" env CGO_ENABLED=0 GOCACHE=/tmp/gocache "HOME=/home/$APP_USER" \
   "$GO_BIN" build -C "$APP_DIR/services/gateway" -o bin/gateway ./cmd/gateway
 
+# Building via GOCACHE=/tmp leaves the binary labelled user_tmp_t, which systemd refuses
+# to execute (203/EXEC, "Permission denied") even though the file mode is correct.
+if command -v restorecon >/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+  dnf install -y -q policycoreutils-python-utils >/dev/null 2>&1 || true
+  semanage fcontext -a -t bin_t "$APP_DIR/services/gateway/bin(/.*)?" >/dev/null 2>&1 || true
+  restorecon -R "$APP_DIR/services/gateway/bin" >/dev/null 2>&1 || true
+fi
+
 log "Building frontend"
 NODE_OPTS=""
 # Vite's build is the peak memory moment. On a small box cap the heap so it spills to swap
@@ -211,6 +219,11 @@ else
 fi
 
 # ── 7. Environment file ─────────────────────────────────────────────────────────────────
+# astropy and matplotlib write config under $HOME on first import. The systemd units set
+# ProtectHome, so they are pointed here instead — it must exist and be writable.
+mkdir -p "$APP_DIR/data/home/.config" "$APP_DIR/data/home/.cache/matplotlib"
+chown -R "$APP_USER:$APP_USER" "$APP_DIR/data/home"
+
 if [[ ! -f "$APP_DIR/.env" ]]; then
   sudo -u "$APP_USER" cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   log "Created $APP_DIR/.env — add GEMINI_API_KEY there if you want the AI assistant"

@@ -17,6 +17,14 @@ EnvironmentFile=-/opt/cmb-lab/.env
 Environment=DATA_DIR=/opt/cmb-lab/data
 Environment=PYTHONUNBUFFERED=1
 
+# ProtectHome below hides /home, but astropy and matplotlib both insist on writing a
+# config directory under $HOME at import time. Point them at the one writable path this
+# unit has, so the hardening can stay on.
+Environment=HOME=/opt/cmb-lab/data/home
+Environment=XDG_CONFIG_HOME=/opt/cmb-lab/data/home/.config
+Environment=XDG_CACHE_HOME=/opt/cmb-lab/data/home/.cache
+Environment=MPLCONFIGDIR=/opt/cmb-lab/data/home/.cache/matplotlib
+
 # Scientific Python spawns a thread pool per process by default. With eight services on a
 # 4-core box that is heavy oversubscription, so pin each to one thread and let the process
 # pools inside cosmology/anomaly do the real parallelism.
