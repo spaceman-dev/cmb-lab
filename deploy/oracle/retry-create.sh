@@ -60,14 +60,12 @@ fi
 (( BOOT_VOLUME_GB >= 47 && BOOT_VOLUME_GB <= FREE_MAX_BOOT_GB )) \
   || die "BOOT_VOLUME_GB=$BOOT_VOLUME_GB is outside the Always Free range (47-$FREE_MAX_BOOT_GB)."
 
-# 1 GB cannot run this: the scientific Python imports alone need ~1.05 GB across the eight
-# services. Fail loudly rather than producing an instance that OOMs on first request.
-if [[ "$SHAPE" == "VM.Standard.E2.1.Micro" ]]; then
-  die "VM.Standard.E2.1.Micro has 1 GB of RAM and cannot run cmb-lab.
-  Measured: ~131 MB per service to import numpy/astropy/healpy/camb, x8 services
-  = ~1.05 GB before any data is loaded, plus ~300 MB for the OS.
-  Use VM.Standard.A1.Flex with at least 1 OCPU / 6 GB."
-fi
+# Ampere is heavily contended. E2.1.Micro usually has capacity, and measurement shows the
+# full stack does fit in 1 GB: 693 MiB steady state, all endpoints healthy at a 768 MB cap
+# (it only starts OOM-killing at 640 MB). It is tight and slow, but it works — so it is
+# worth falling back to rather than waiting indefinitely for Ampere.
+FALLBACK_SHAPE="${FALLBACK_SHAPE:-VM.Standard.E2.1.Micro}"
+FALLBACK_AFTER="${FALLBACK_AFTER:-12}"   # passes before also trying the fallback; 0 disables
 
 command -v oci >/dev/null || die "OCI CLI not found.
   In the OCI Console, click the '>_' Cloud Shell icon — it is pre-installed there.
@@ -244,33 +242,62 @@ while :; do
   refresh_token_if_due
 
   for ad in $ADS; do
-    printf '[%s] pass %-4d %-28s ' "$(date +%H:%M:%S)" "$attempt" "$ad"
+    # After enough failed passes, also try the smaller always-available shape. Ampere in
+    # a single-AD region can stay full for days.
+    shapes="$SHAPE"
+    if [[ -n "$FALLBACK_SHAPE" ]] && (( FALLBACK_AFTER > 0 && attempt > FALLBACK_AFTER )); then
+      shapes="$SHAPE $FALLBACK_SHAPE"
+    fi
 
-    output=$(oci_call compute instance launch  \
-      --compartment-id "$COMPARTMENT_OCID" \
-      --availability-domain "$ad" \
-      --display-name "$DISPLAY_NAME" \
-      --shape "$SHAPE" \
-      --shape-config "{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_GB}}" \
-      --image-id "$IMAGE_OCID" \
-      --subnet-id "$SUBNET_OCID" \
-      --assign-public-ip true \
-      --boot-volume-size-in-gbs "$BOOT_VOLUME_GB" \
-      --ssh-authorized-keys-file "$SSH_PUBLIC_KEY" \
-      --wait-for-state RUNNING 2>&1)
-    rc=$?
+    for shape in $shapes; do
+      if [[ "$shape" == "VM.Standard.E2.1.Micro" ]]; then
+        shape_cfg=""                       # fixed 1 OCPU / 1 GB, not configurable
+      else
+        shape_cfg="{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_GB}}"
+      fi
 
-    if (( rc == 0 )); then
-      instance_id=$(grep -oE 'ocid1\.instance\.[a-z0-9.-]+' <<<"$output" | head -1)
-      ip=$(oci_call compute instance list-vnics  --instance-id "$instance_id" \
-             --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
-      cat <<EOF
+      printf '[%s] pass %-4d %-22s %-24s ' "$(date +%H:%M:%S)" "$attempt" "${ad##*:}" "$shape"
+
+      if [[ -n "$shape_cfg" ]]; then
+        output=$(oci_call compute instance launch \
+          --compartment-id "$COMPARTMENT_OCID" \
+          --availability-domain "$ad" \
+          --display-name "$DISPLAY_NAME" \
+          --shape "$shape" \
+          --shape-config "$shape_cfg" \
+          --image-id "$IMAGE_OCID" \
+          --subnet-id "$SUBNET_OCID" \
+          --assign-public-ip true \
+          --boot-volume-size-in-gbs "$BOOT_VOLUME_GB" \
+          --ssh-authorized-keys-file "$SSH_PUBLIC_KEY" \
+          --wait-for-state RUNNING 2>&1)
+      else
+        output=$(oci_call compute instance launch \
+          --compartment-id "$COMPARTMENT_OCID" \
+          --availability-domain "$ad" \
+          --display-name "$DISPLAY_NAME" \
+          --shape "$shape" \
+          --image-id "$IMAGE_OCID" \
+          --subnet-id "$SUBNET_OCID" \
+          --assign-public-ip true \
+          --boot-volume-size-in-gbs "$BOOT_VOLUME_GB" \
+          --ssh-authorized-keys-file "$SSH_PUBLIC_KEY" \
+          --wait-for-state RUNNING 2>&1)
+      fi
+      rc=$?
+
+      if (( rc == 0 )); then
+        instance_id=$(grep -oE 'ocid1\.instance\.[a-z0-9.-]+' <<<"$output" | head -1)
+        ip=$(oci_call compute instance list-vnics --instance-id "$instance_id" \
+               --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
+        cat <<EOF
 CREATED
 
   ✓ Instance is running.
 
-    OCID: $instance_id
-    IP:   $ip
+    Shape: $shape
+    OCID:  $instance_id
+    IP:    $ip
 
   Next:
     1. Open TCP 80 and 443 in the VCN security list
@@ -283,40 +310,54 @@ CREATED
        sudo /tmp/cmb-lab/deploy/oracle/bootstrap.sh
 
 EOF
-      exit 0
-    fi
+        if [[ "$shape" == "VM.Standard.E2.1.Micro" ]]; then
+          cat <<'EOF'
+  Note: this is the 1 GB shape. Measured steady state is ~693 MiB, which fits, but
+  leaves little headroom. Before running the bootstrap, add swap:
 
-    if grep -qiE 'out of capacity|outofcapacity|internalerror' <<<"$output"; then
-      echo "no capacity"
-      backoff=0
-    elif grep -qiE 'toomanyrequests|too many requests|"status": 429' <<<"$output"; then
-      # Oracle throttled us. Backing off is the only correct response: retrying sooner
-      # just extends the throttle.
-      backoff=$(( backoff == 0 ? 300 : backoff * 2 ))
-      (( backoff > 3600 )) && backoff=3600
-      echo "rate limited — backing off ${backoff}s"
-      sleep "$backoff"
-    elif grep -qiE 'limitexceeded|quotaexceeded' <<<"$output"; then
-      echo "QUOTA"
-      die "Service limit reached. Always Free allows 4 OCPU / 24 GB of Ampere in total,
+    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+    sudo mkswap /swapfile && sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+  Expect MCMC and the anomaly Monte Carlo to be slow; reduce walkers and steps.
+
+EOF
+        fi
+        exit 0
+      fi
+
+      if grep -qiE 'out of capacity|outofcapacity|internalerror' <<<"$output"; then
+        echo "no capacity"
+        backoff=0
+      elif grep -qiE 'toomanyrequests|too many requests|"status": 429' <<<"$output"; then
+        # Oracle throttled us. Backing off is the only correct response: retrying
+        # sooner just extends the throttle.
+        backoff=$(( backoff == 0 ? 300 : backoff * 2 ))
+        (( backoff > 3600 )) && backoff=3600
+        echo "rate limited — backing off ${backoff}s"
+        sleep "$backoff"
+      elif grep -qiE 'limitexceeded|quotaexceeded' <<<"$output"; then
+        echo "QUOTA"
+        die "Service limit reached. Always Free allows 4 OCPU / 24 GB of Ampere in total,
   so an existing instance may be consuming it. Check Compute > Instances, or lower
   OCPUS / MEMORY_GB."
-    elif grep -qiE 'notauthenticated|expired|invalid.*token|401' <<<"$output"; then
-      # Recoverable: refresh and let the next pass retry rather than aborting a loop
-      # that may have been running for hours.
-      echo "auth expired"
-      if oci session refresh --profile "${OCI_CLI_PROFILE:-DEFAULT}" >/dev/null 2>&1; then
-        last_refresh=$(date +%s)
-        log "session token refreshed, continuing"
-      else
-        die "Session expired and could not be refreshed. Run:
+      elif grep -qiE 'notauthenticated|expired|invalid.*token|401' <<<"$output"; then
+        # Recoverable: refresh and let the next pass retry rather than aborting a loop
+        # that may have been running for hours.
+        echo "auth expired"
+        if oci session refresh --profile "${OCI_CLI_PROFILE:-DEFAULT}" >/dev/null 2>&1; then
+          last_refresh=$(date +%s)
+          log "session token refreshed, continuing"
+        else
+          die "Session expired and could not be refreshed. Run:
   oci session authenticate --profile-name ${OCI_CLI_PROFILE:-DEFAULT}"
+        fi
+      else
+        echo "FAILED"
+        sed 's/^/    /' <<<"$output" | head -12
+        die "Not a capacity problem — see the message above."
       fi
-    else
-      echo "FAILED"
-      sed 's/^/    /' <<<"$output" | head -12
-      die "Not a capacity problem — see the message above."
-    fi
+    done
   done
 
   sleep "$INTERVAL"
