@@ -669,10 +669,13 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             f"\n{DIM}healpy has no Windows build, so spectrum, anomaly, skymap and tutor\n"
             f"cannot run natively. This script runs them in Docker or WSL instead.{RESET}"
         )
-        try:
-            print(f"  backend that would be used: {_choose_backend(None, 'status')}")
-        except SystemExit:
-            print(f"  {RED}no usable backend{RESET} — install Docker Desktop or run: wsl --install")
+        # Worked out directly rather than via _choose_backend, which exits on failure.
+        if _docker_ready():
+            print("  backend that would be used: docker")
+        elif _wsl_distro():
+            print(f"  backend that would be used: wsl ({_wsl_distro()})")
+        else:
+            print(f"  {RED}no usable backend{RESET} — install Docker Desktop, or: wsl --install")
     return 0
 
 
