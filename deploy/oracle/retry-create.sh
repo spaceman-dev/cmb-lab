@@ -211,11 +211,34 @@ cat <<EOF
 EOF
 
 attempt=0
+last_refresh=$(date +%s)
+
+# Session tokens last an hour. Refreshing well inside that keeps an unattended loop alive
+# for days instead of dying quietly ~60 minutes in. Cloud Shell's delegation token is
+# managed for us, so only refresh when using a local profile.
+refresh_token_if_due() {
+  [[ -n "$OCI_AUTH" ]] && return 0                 # Cloud Shell: nothing to do
+  [[ -n "${OCI_CLI_PROFILE:-}" ]] || return 0
+  local now elapsed
+  now=$(date +%s)
+  elapsed=$(( now - last_refresh ))
+  (( elapsed < 1800 )) && return 0                 # every 30 minutes
+  if oci session refresh --profile "$OCI_CLI_PROFILE" >/dev/null 2>&1; then
+    last_refresh=$now
+    log "session token refreshed"
+  else
+    warn "token refresh failed; re-authenticate with:"
+    warn "  oci session authenticate --profile-name $OCI_CLI_PROFILE"
+  fi
+}
+
 while :; do
   attempt=$((attempt + 1))
   if (( MAX_ATTEMPTS > 0 && attempt > MAX_ATTEMPTS )); then
     die "Gave up after $MAX_ATTEMPTS passes."
   fi
+
+  refresh_token_if_due
 
   for ad in $ADS; do
     printf '[%s] pass %-4d %-28s ' "$(date +%H:%M:%S)" "$attempt" "$ad"
@@ -267,6 +290,17 @@ EOF
       die "Service limit reached. Always Free allows 4 OCPU / 24 GB of Ampere in total,
   so an existing instance may be consuming it. Check Compute > Instances, or lower
   OCPUS / MEMORY_GB."
+    elif grep -qiE 'notauthenticated|expired|invalid.*token|401' <<<"$output"; then
+      # Recoverable: refresh and let the next pass retry rather than aborting a loop
+      # that may have been running for hours.
+      echo "auth expired"
+      if oci session refresh --profile "${OCI_CLI_PROFILE:-DEFAULT}" >/dev/null 2>&1; then
+        last_refresh=$(date +%s)
+        log "session token refreshed, continuing"
+      else
+        die "Session expired and could not be refreshed. Run:
+  oci session authenticate --profile-name ${OCI_CLI_PROFILE:-DEFAULT}"
+      fi
     else
       echo "FAILED"
       sed 's/^/    /' <<<"$output" | head -12
