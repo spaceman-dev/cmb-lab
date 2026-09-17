@@ -24,7 +24,9 @@ OCPUS="${OCPUS:-1}"                  # free tier allows 4 total; 1 places far mo
 MEMORY_GB="${MEMORY_GB:-6}"          # free tier allows 24 total; 6 is the A1 minimum
 BOOT_VOLUME_GB="${BOOT_VOLUME_GB:-50}"
 DISPLAY_NAME="${DISPLAY_NAME:-cmb-lab}"
-INTERVAL="${INTERVAL:-60}"           # seconds between full passes
+# Oracle rate-limits launch_instance. Polling hard gets you 429s, which wastes the attempt
+# and helps nobody, so the default gap is deliberately unhurried.
+INTERVAL="${INTERVAL:-300}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-0}"    # 0 = unlimited
 
 log()  { printf '\033[36m%s\033[0m\n' "$*"; }
@@ -212,6 +214,7 @@ EOF
 
 attempt=0
 last_refresh=$(date +%s)
+backoff=0
 
 # Session tokens last an hour. Refreshing well inside that keeps an unattended loop alive
 # for days instead of dying quietly ~60 minutes in. Cloud Shell's delegation token is
@@ -285,6 +288,14 @@ EOF
 
     if grep -qiE 'out of capacity|outofcapacity|internalerror' <<<"$output"; then
       echo "no capacity"
+      backoff=0
+    elif grep -qiE 'toomanyrequests|too many requests|"status": 429' <<<"$output"; then
+      # Oracle throttled us. Backing off is the only correct response: retrying sooner
+      # just extends the throttle.
+      backoff=$(( backoff == 0 ? 300 : backoff * 2 ))
+      (( backoff > 3600 )) && backoff=3600
+      echo "rate limited — backing off ${backoff}s"
+      sleep "$backoff"
     elif grep -qiE 'limitexceeded|quotaexceeded' <<<"$output"; then
       echo "QUOTA"
       die "Service limit reached. Always Free allows 4 OCPU / 24 GB of Ampere in total,
