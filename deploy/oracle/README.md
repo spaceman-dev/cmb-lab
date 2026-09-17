@@ -11,15 +11,16 @@ scripts do that for you.
 
 ## The short version
 
-Open **Cloud Shell** — the `>_` icon in the OCI console's top bar. The CLI is already
-authenticated there, so there is nothing to configure.
+Open **Cloud Shell** — the `>_` icon in the OCI console's top bar.
 
 ```bash
 git clone https://github.com/spaceman-dev/cmb-lab.git && cd cmb-lab
-
-./deploy/oracle/setup-network.sh     # VCN + public subnet + ports 22/80/443
-./deploy/oracle/retry-create.sh      # loops until Ampere capacity frees up
+./deploy/oracle/deploy.sh
 ```
+
+That one script inventories existing instances and offers to remove any too small to run
+the app, creates a public subnet if there isn't one, and then loops instance creation until
+Ampere capacity frees up.
 
 When it reports an IP, SSH in and run the bootstrap:
 
@@ -30,10 +31,25 @@ git clone https://github.com/spaceman-dev/cmb-lab.git /tmp/cmb-lab
 sudo /tmp/cmb-lab/deploy/oracle/bootstrap.sh
 ```
 
-**Order matters.** The network has to exist first — an instance created on a private subnet
-cannot be given a public IP, and that is not fixable afterwards.
+> **Use Cloud Shell, not your laptop.** The CLI is pre-authenticated there, and it runs
+> inside Oracle's network. Corporate TLS inspection (Zscaler and similar) breaks the OCI
+> CLI's Python HTTP stack in ways that look like certificate errors but are not — `curl`
+> and `openssl` will both succeed while the CLI hangs indefinitely.
+
+**Order matters.** The network has to exist before the instance: an instance created on a
+private subnet cannot be given a public IP, and that is not fixable afterwards.
+
+### Always Free safety
+
+`retry-create.sh` refuses to create anything billable. It checks the shape is on the Always
+Free list, caps Ampere at 4 OCPU / 24 GB with the 6 GB-per-OCPU ratio enforced, caps the
+boot volume at 200 GB, and sums existing instances first — the allowance is tenancy-wide, so
+a forgotten instance silently consumes it.
+
+Defaults are the smallest thing that actually works: **1 OCPU / 6 GB, 50 GB boot volume**.
 
 The rest of this document explains each step and what to do when it goes wrong.
+
 
 ---
 
