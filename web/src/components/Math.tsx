@@ -111,3 +111,25 @@ export function RichText({ text, className }: { text: string; className?: string
 
   return <div ref={container} className={className} />;
 }
+
+/**
+ * Inline `$math$` inside a run of text, rendered as spans.
+ *
+ * Headings need this rather than RichText: RichText wraps its output in a div, which is
+ * invalid inside an h1/h2 and makes the browser hoist it out of the heading.
+ */
+export function MathText({ text, className }: { text: string; className?: string }) {
+  const parts = useMemo(() => text.split(/(\$[^$]+\$)/g), [text]);
+
+  return (
+    <span className={className}>
+      {parts.map((part, i) =>
+        part.startsWith("$") && part.endsWith("$") && part.length > 2 ? (
+          <Math key={i} tex={part.slice(1, -1)} />
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </span>
+  );
+}

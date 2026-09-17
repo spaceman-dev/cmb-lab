@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Curriculum, Lesson } from "../api/types";
 import { AudioPlayer } from "../components/AudioPlayer";
-import { Math, RichText } from "../components/Math";
+import { Math, MathText, RichText } from "../components/Math";
 
 /**
  * How much detail to show. The default is deliberately the gentlest one: a reader meeting
@@ -98,7 +98,9 @@ export function LearnView() {
                 >
                   <span className="lesson-item__n">{index + 1}</span>
                   <span className="lesson-item__body">
-                    <span className="lesson-item__title">{item.title}</span>
+                    <span className="lesson-item__title">
+                      <MathText text={item.title} />
+                    </span>
                     <span className="lesson-item__sub">
                       {item.n_sections} sections · {item.duration_min} min
                     </span>
@@ -114,7 +116,9 @@ export function LearnView() {
               <ul className="section-list">
                 {lesson.sections.map((s) => (
                   <li key={s.id}>
-                    <a href={`#${s.id}`}>{s.title}</a>
+                    <a href={`#${s.id}`}>
+                      <MathText text={s.title} />
+                    </a>
                   </li>
                 ))}
               </ul>
@@ -132,7 +136,9 @@ export function LearnView() {
                   Lesson {lesson.navigation.position} of {lesson.navigation.total}
                 </span>
                 <h1>{lesson.title}</h1>
-                <p className="lesson-header__sub">{lesson.subtitle}</p>
+                <p className="lesson-header__sub">
+                  <MathText text={lesson.subtitle} />
+                </p>
                 {lesson.prerequisites.length > 0 && (
                   <p className="hint">
                     Builds on:{" "}
@@ -147,7 +153,9 @@ export function LearnView() {
 
               {lesson.sections.map((section) => (
                 <article key={section.id} id={section.id} className="panel lesson-section">
-                  <h2>{section.title}</h2>
+                  <h2>
+                    <MathText text={section.title} />
+                  </h2>
 
                   <AudioPlayer
                     src={api.audioUrl(lesson.id, section.id)}
