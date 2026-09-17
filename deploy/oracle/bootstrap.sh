@@ -35,10 +35,23 @@ esac
 log "Detected $PRETTY_NAME ($OS_FAMILY family) on $(uname -m)"
 [[ "$(uname -m)" == "aarch64" ]] || warn "Expected aarch64 (Ampere A1). Continuing anyway."
 
-MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
-log "Resources: $(nproc) vCPU, ${MEM_GB} GB RAM"
-(( MEM_GB >= 5 )) || die "Need at least 6 GB RAM. CAMB will not build on ${MEM_GB} GB."
-(( MEM_GB >= 10 )) || warn "Under 12 GB — capping the Node build heap to compensate."
+# Work in MB: integer-dividing to GB reports 0 on a 1 GB box and fails the check below.
+MEM_MB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 ))
+SWAP_MB=$(( $(awk '/SwapTotal/ {print $2}' /proc/meminfo) / 1024 ))
+USABLE_MB=$(( MEM_MB + SWAP_MB ))
+log "Resources: $(nproc) vCPU, ${MEM_MB} MB RAM + ${SWAP_MB} MB swap = ${USABLE_MB} MB usable"
+
+# Measured: the full stack is healthy at a 768 MB cap and only OOM-kills at 640 MB.
+# Swap counts, because the build peaks are transient and the steady state is ~693 MB.
+(( USABLE_MB >= 1400 )) || die "Only ${USABLE_MB} MB usable (RAM + swap).
+  cmb-lab needs ~693 MB steady state, and the CAMB/npm builds peak well above that.
+  Add swap before re-running:
+    sudo dd if=/dev/zero of=/swapfile bs=1M count=3072
+    sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab"
+
+(( MEM_MB >= 1800 )) && LOW_MEM=0 || LOW_MEM=1
+(( LOW_MEM )) && warn "Under 2 GB of RAM — builds will lean on swap and be slow."
 
 # ── 1. System packages ──────────────────────────────────────────────────────────────────
 log "Installing system packages (a few minutes)"
@@ -173,7 +186,9 @@ sudo -u "$APP_USER" env CGO_ENABLED=0 GOCACHE=/tmp/gocache "HOME=/home/$APP_USER
 
 log "Building frontend"
 NODE_OPTS=""
-(( MEM_GB < 12 )) && NODE_OPTS="--max-old-space-size=2048"
+# Vite's build is the peak memory moment. On a small box cap the heap so it spills to swap
+# instead of being OOM-killed.
+(( LOW_MEM )) && NODE_OPTS="--max-old-space-size=1024"
 sudo -u "$APP_USER" npm --prefix "$APP_DIR/web" ci --silent
 sudo -u "$APP_USER" env NODE_OPTIONS="$NODE_OPTS" npm --prefix "$APP_DIR/web" run build
 
