@@ -88,6 +88,8 @@ jobs:
           python scripts/dev.py --backend native status
           if ($LASTEXITCODE -eq 0) { Write-Error "native should be refused on Windows"; exit 1 }
           Write-Host "correctly refused"
+          # pwsh exits with $LASTEXITCODE, which is still 1 from the expected failure above.
+          exit 0
 
       - name: the PowerShell wrapper reaches dev.py
         shell: pwsh
