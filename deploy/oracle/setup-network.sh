@@ -48,7 +48,7 @@ if [[ -z "$COMPARTMENT_OCID" ]]; then
 fi
 [[ -n "$COMPARTMENT_OCID" ]] || die "Could not determine the compartment OCID.
 
-  Note: a compartment NAME (e.g. 'dhruvbhat') is not an OCID. An OCID looks like
+  Note: a compartment NAME (e.g. 'my-compartment') is not an OCID. An OCID looks like
     ocid1.tenancy.oc1..aaaaaaaa...
 
   In Cloud Shell:  echo \$OCI_TENANCY

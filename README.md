@@ -106,43 +106,56 @@ limitations.
 
 ## Quick start
 
-**Requirements:** Python 3.12, Node 20+, ~2 GB disk. Go is downloaded into the repo
-automatically — you do not need it installed.
+Clone it and run **one command**. Node and Go are downloaded into the repo, the data is
+fetched from NASA, everything is built, and all nine services start.
 
-> Python **3.12 specifically** — healpy and camb do not yet ship wheels for 3.13+.
-
-| Platform | How |
-| :-- | :-- |
-| **macOS** (Intel or Apple Silicon) | Natively, below |
-| **Linux** (x86-64 or ARM) | Natively, below |
-| **Windows** | `.\scripts\dev.ps1 up` — runs itself in Docker or WSL, see [Windows](#windows) |
+<table>
+<tr><th>macOS / Linux</th><th>Windows</th></tr>
+<tr><td>
 
 ```bash
 git clone https://github.com/spaceman-dev/cmb-lab.git
 cd cmb-lab
-
-make setup            # venv + every package
-make toolchain        # fetch Go for this OS/arch
-make build            # gateway binary + frontend
-make data-bootstrap   # ~170 MB from NASA LAMBDA and ESA. No API key, no account
-
-./scripts/dev.sh up   # start all 9 services
+python3 scripts/dev.py bootstrap
 ```
 
-Then open **http://localhost:5174**.
+</td><td>
 
-Everything is driven by [scripts/dev.py](scripts/dev.py), which behaves identically on every
-platform — `setup`, `toolchain`, `build`, `up`, `down`, `restart`, `status`, `logs`, `doctor`.
-`scripts/dev.sh` and `scripts/dev.ps1` are thin wrappers around it, so there is only one
-implementation to keep correct. `make` is a convenience, never a requirement.
+```powershell
+git clone https://github.com/spaceman-dev/cmb-lab.git
+cd cmb-lab
+.\scripts\dev.ps1 bootstrap
+```
+
+</td></tr>
+</table>
+
+Then open **http://localhost:5174** (macOS/Linux) or **http://localhost:7860** (Windows).
+
+**What you need beforehand:** essentially nothing.
+
+| | Needed? | Why |
+| :-- | :-- | :-- |
+| **Python 3.12** | macOS/Linux only | healpy and camb have no 3.13+ wheels. `bootstrap` offers to install it via brew/apt if missing |
+| **Node** | ✗ | Downloaded into `.toolchain/` automatically |
+| **Go** | ✗ | Downloaded into `.toolchain/` automatically |
+| **Docker** | Windows only | healpy has no Windows build — see [Windows](#windows) |
+
+Disk: about 4 GB in total (2 GB of that is the Docker image, if you use it).
 
 ```bash
-python scripts/dev.py doctor     # check this machine has what it needs
+python scripts/dev.py doctor     # what does this machine still need?
 python scripts/dev.py status     # health table for all 9 services
 python scripts/dev.py logs chat  # follow one service
+python scripts/dev.py down       # stop everything
 ```
 
-Logs land in `data/logs/`.
+Everything is driven by [scripts/dev.py](scripts/dev.py), which behaves identically on every
+platform. `scripts/dev.sh` and `scripts/dev.ps1` are thin wrappers, so there is only one
+implementation to keep correct. `make` is a convenience, never a requirement.
+
+Logs land in `data/logs/`. Individual steps are available if you would rather not run
+everything at once: `setup`, `toolchain`, `node`, `build`, `data`, `up`.
 
 ### Windows
 
@@ -152,7 +165,7 @@ is handled for you:
 ```powershell
 git clone https://github.com/spaceman-dev/cmb-lab.git
 cd cmb-lab
-.\scripts\dev.ps1 up
+.\scripts\dev.ps1 bootstrap
 ```
 
 Then open **http://localhost:7860**. That is the whole setup. You do not need Python, Node
@@ -162,7 +175,7 @@ or Go on Windows — only Docker.
 .\scripts\dev.ps1 status     # is it up?
 .\scripts\dev.ps1 logs       # follow the logs
 .\scripts\dev.ps1 down       # stop it
-.\scripts\dev.ps1 up -Backend wsl   # use WSL instead of Docker
+.\scripts\dev.ps1 bootstrap -Backend wsl   # use WSL instead of Docker
 ```
 
 **Why not natively?** [healpy has no Windows build](https://pypi.org/project/healpy/) — no

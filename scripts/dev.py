@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import platform
 import shutil
@@ -44,6 +45,7 @@ RUN = ROOT / "data" / "run"
 
 TOOLCHAIN = ROOT / ".toolchain"
 GO = TOOLCHAIN / "go" / "bin" / f"go{EXE}"
+NODE_DIR = TOOLCHAIN / "node"
 GATEWAY_BIN = ROOT / "services" / "gateway" / "bin" / f"gateway{EXE}"
 
 SERVICES = {
@@ -394,21 +396,36 @@ def cmd_setup(_args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- toolchain
 
 
+def _arch() -> str:
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    die(f"unsupported CPU architecture: {platform.machine()}")
+
+
 def _go_archive_name() -> tuple[str, str]:
     """Return (goos, goarch) using Go's naming, derived from this machine."""
     system = platform.system().lower()
     goos = {"darwin": "darwin", "linux": "linux", "windows": "windows"}.get(system)
     if goos is None:
         die(f"unsupported OS for the vendored Go toolchain: {platform.system()}")
+    return goos, _arch()
 
-    machine = platform.machine().lower()
-    if machine in ("arm64", "aarch64"):
-        goarch = "arm64"
-    elif machine in ("x86_64", "amd64"):
-        goarch = "amd64"
+
+def _download(url: str, target: Path) -> None:
+    with urllib.request.urlopen(url, timeout=900) as resp, target.open("wb") as out:
+        shutil.copyfileobj(resp, out)
+
+
+def _extract(archive: Path, into: Path) -> None:
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(into)
     else:
-        die(f"unsupported CPU architecture: {platform.machine()}")
-    return goos, goarch
+        with tarfile.open(archive) as tf:
+            tf.extractall(into, filter="data")  # refuse absolute/traversing paths
 
 
 def cmd_toolchain(_args: argparse.Namespace) -> int:
@@ -417,24 +434,16 @@ def cmd_toolchain(_args: argparse.Namespace) -> int:
         return 0
 
     goos, goarch = _go_archive_name()
-    with urllib.request.urlopen("https://go.dev/VERSION?m=text", timeout=30) as resp:
+    with urllib.request.urlopen("https://go.dev/VERSION?m=text", timeout=60) as resp:
         version = resp.read().decode().splitlines()[0].strip()
 
     suffix = "zip" if goos == "windows" else "tar.gz"
-    url = f"https://go.dev/dl/{version}.{goos}-{goarch}.{suffix}"
-    info(f"downloading {version} for {goos}/{goarch}")
+    info(f"downloading Go {version} for {goos}/{goarch}")
 
     TOOLCHAIN.mkdir(parents=True, exist_ok=True)
     archive = TOOLCHAIN / f"go.{suffix}"
-    with urllib.request.urlopen(url, timeout=600) as resp, archive.open("wb") as out:
-        shutil.copyfileobj(resp, out)
-
-    if suffix == "zip":
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(TOOLCHAIN)
-    else:
-        with tarfile.open(archive) as tf:
-            tf.extractall(TOOLCHAIN, filter="data")  # refuse absolute/traversing paths
+    _download(f"https://go.dev/dl/{version}.{goos}-{goarch}.{suffix}", archive)
+    _extract(archive, TOOLCHAIN)
     archive.unlink(missing_ok=True)
 
     if not WINDOWS:
@@ -443,11 +452,66 @@ def cmd_toolchain(_args: argparse.Namespace) -> int:
     return 0
 
 
+# ------------------------------------------------------------------ node toolchain
+
+
+def _vendored_npm() -> Path:
+    # Windows puts npm at the root of the archive; every other platform uses bin/.
+    return NODE_DIR / ("npm.cmd" if WINDOWS else "bin/npm")
+
+
+def _npm() -> str | None:
+    vendored = _vendored_npm()
+    if vendored.exists():
+        return str(vendored)
+    return shutil.which("npm")
+
+
+def cmd_node(_args: argparse.Namespace) -> int:
+    """Vendor Node into .toolchain, so the frontend needs no system install."""
+    if _vendored_npm().exists():
+        info(f"node already vendored at {NODE_DIR}")
+        return 0
+
+    with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=60) as resp:
+        index = json.load(resp)
+    release = next((e for e in index if e.get("lts")), None)
+    if release is None:
+        die("could not find a Node LTS release")
+    version = release["version"]
+
+    system = platform.system().lower()
+    arch = "arm64" if _arch() == "arm64" else "x64"  # Node says x64, Go says amd64
+    if system == "darwin":
+        name, suffix = f"node-{version}-darwin-{arch}", "tar.gz"
+    elif system == "linux":
+        name, suffix = f"node-{version}-linux-{arch}", "tar.xz"
+    elif system == "windows":
+        name, suffix = f"node-{version}-win-{arch}", "zip"
+    else:
+        die(f"unsupported OS for the vendored Node toolchain: {platform.system()}")
+
+    info(f"downloading Node {version} for {system}/{arch}")
+    TOOLCHAIN.mkdir(parents=True, exist_ok=True)
+    archive = TOOLCHAIN / f"node.{suffix}"
+    _download(f"https://nodejs.org/dist/{version}/{name}.{suffix}", archive)
+    _extract(archive, TOOLCHAIN)
+    archive.unlink(missing_ok=True)
+
+    extracted = TOOLCHAIN / name
+    if NODE_DIR.exists():
+        shutil.rmtree(NODE_DIR)
+    extracted.rename(NODE_DIR)
+
+    subprocess.run([str(_vendored_npm()), "--version"], check=True)
+    return 0
+
+
 # --------------------------------------------------------------------------- build
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    only = args.target
+    only = getattr(args, "target", None)  # bootstrap calls this without a target
     if only in (None, "gateway"):
         if not GO.exists():
             die("Go toolchain missing — run: python scripts/dev.py toolchain")
@@ -467,9 +531,9 @@ def cmd_build(args: argparse.Namespace) -> int:
         )
 
     if only in (None, "web"):
-        npm = shutil.which("npm")
+        npm = _npm()
         if not npm:
-            die("npm not found — install Node 20+ from https://nodejs.org")
+            die("Node missing — run: python scripts/dev.py node")
         web = ROOT / "web"
         if not (web / "node_modules").is_dir():
             info("installing frontend dependencies")
@@ -478,6 +542,92 @@ def cmd_build(args: argparse.Namespace) -> int:
         subprocess.run([npm, "run", "build"], cwd=web, check=True)
 
     return 0
+
+
+# --------------------------------------------------------------------------- bootstrap
+
+
+def _ask(question: str, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    return input(f"  {question} [y/N] ").strip().lower() in ("y", "yes")
+
+
+def _install_python312(assume_yes: bool) -> str | None:
+    """Offer to install Python 3.12 with the platform's package manager."""
+    system = platform.system().lower()
+    if system == "darwin" and shutil.which("brew"):
+        cmd, label = ["brew", "install", "python@3.12"], "Homebrew"
+    elif system == "linux" and shutil.which("apt-get"):
+        cmd = ["sudo", "apt-get", "install", "-y", "python3.12", "python3.12-venv"]
+        label = "apt"
+    elif system == "windows" and shutil.which("winget"):
+        cmd = ["winget", "install", "-e", "--id", "Python.Python.3.12"]
+        label = "winget"
+    else:
+        return None
+
+    print("  Python 3.12 is required (healpy and camb have no 3.13+ wheels).")
+    print(f"  Proposed: {' '.join(cmd)}")
+    if not _ask(f"Install it with {label}?", assume_yes):
+        return None
+    subprocess.run(cmd, check=True)
+    return shutil.which("python3.12")
+
+
+def cmd_data(_args: argparse.Namespace) -> int:
+    """Download and clean the minimum working dataset (~170 MB)."""
+    ingest = VENV_BIN / f"cmblab-ingest{EXE}"
+    if not ingest.exists():
+        die("run `python scripts/dev.py setup` first")
+    if (ROOT / "data" / "clean").is_dir() and any((ROOT / "data" / "clean").iterdir()):
+        info("archive data already present")
+        return 0
+    info("downloading ~170 MB from NASA LAMBDA and ESA (no account needed)")
+    subprocess.run([str(ingest), "bootstrap"], cwd=ROOT, check=False)
+    return 0
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Everything, from a bare machine to a running site, in one command."""
+    print(f"cmb-lab bootstrap \u2014 {platform.system()} {platform.machine()}\n")
+
+    backend = _choose_backend(args.backend, "up")
+    if backend != "native":
+        # Docker and WSL both provide their own Python, Node and Go.
+        info(f"using the {backend} backend; it provides its own toolchain")
+        if backend == "wsl":
+            return _wsl_dispatch("bootstrap", args)
+        return docker_up(args)
+
+    if sys.version_info[:2] != (3, 12) and not shutil.which("python3.12"):
+        if not _install_python312(getattr(args, "yes", False)):
+            die(
+                "Python 3.12 is required and could not be installed automatically.\n"
+                "  macOS:   brew install python@3.12\n"
+                "  Ubuntu:  sudo apt install python3.12 python3.12-venv\n"
+                "  Windows: winget install -e --id Python.Python.3.12"
+            )
+
+    steps = (
+        ("Python packages", cmd_setup),
+        ("Go toolchain", cmd_toolchain),
+        ("Node toolchain", cmd_node),
+        ("gateway + frontend", cmd_build),
+        ("archive data", cmd_data),
+    )
+    for n, (label, step) in enumerate(steps, 1):
+        print(f"\n[{n}/{len(steps) + 1}] {label}")
+        step(args)
+
+    print(f"\n[{len(steps) + 1}/{len(steps) + 1}] starting services")
+    rc = cmd_up(args)
+    if rc == 0:
+        print(f"\n  {GREEN}ready{RESET} -> http://localhost:5174")
+        print(f"  {DIM}frontend dev server: make web{RESET}")
+    return rc
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
@@ -491,11 +641,12 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     py312 = sys.version_info[:2] == (3, 12) or shutil.which("python3.12") is not None
     rows.append(("Python 3.12", py312, "healpy/camb have no 3.13+ wheels"))
     rows.append(("virtualenv", VENV_BIN.exists(), str(VENV)))
-    rows.append(("Go toolchain", GO.exists(), str(GO)))
+    rows.append(("Go toolchain", GO.exists(), "auto-downloaded into .toolchain"))
     rows.append(("gateway binary", GATEWAY_BIN.exists(), str(GATEWAY_BIN)))
-    rows.append(("Node/npm", shutil.which("npm") is not None, "needed for the frontend"))
+    node_note = "vendored" if _vendored_npm().exists() else "system"
+    rows.append(("Node/npm", _npm() is not None, node_note))
     rows.append(("frontend build", (ROOT / "web" / "dist").is_dir(), "web/dist"))
-    rows.append(("data downloaded", (ROOT / "data" / "clean").is_dir(), "data/clean"))
+    rows.append(("archive data", (ROOT / "data" / "clean").is_dir(), "data/clean"))
 
     say = shutil.which("say") and shutil.which("afconvert")
     rows.append((
@@ -687,13 +838,16 @@ def docker_logs(_args: argparse.Namespace) -> int:
 
 DOCKER_COMMANDS = {
     "up": docker_up,
+    "bootstrap": docker_up,
     "down": docker_down,
     "restart": lambda a: (docker_down(a), docker_up(a))[1],
     "status": docker_status,
     "logs": docker_logs,
     "build": docker_build,
+    "data": lambda _a: (info("the container downloads its own data on first start"), 0)[1],
     "setup": lambda _a: (info("nothing to set up — the image contains everything"), 0)[1],
     "toolchain": lambda _a: (info("not needed: Go is built inside the image"), 0)[1],
+    "node": lambda _a: (info("not needed: Node is built inside the image"), 0)[1],
 }
 
 
@@ -739,8 +893,12 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
+    boot = sub.add_parser("bootstrap", help="one command: install everything, then start")
+    boot.add_argument("--yes", action="store_true", help="do not prompt before installing")
     sub.add_parser("setup", help="create the venv and install every package")
     sub.add_parser("toolchain", help="download the Go toolchain for this OS/arch")
+    sub.add_parser("node", help="download the Node toolchain for this OS/arch")
+    sub.add_parser("data", help="download the archive data (~170 MB)")
     build = sub.add_parser("build", help="build the gateway binary and the frontend")
     build.add_argument("target", nargs="?", choices=["gateway", "web"])
     up = sub.add_parser("up", help="start every service")
@@ -770,8 +928,11 @@ def main() -> int:
             return handler(args) or 0
 
         handlers = {
+            "bootstrap": cmd_bootstrap,
             "setup": cmd_setup,
             "toolchain": cmd_toolchain,
+            "node": cmd_node,
+            "data": cmd_data,
             "build": cmd_build,
             "up": cmd_up,
             "down": cmd_down,

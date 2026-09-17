@@ -38,9 +38,17 @@ setup: .env $(VENV) ## Full dev setup: venv + editable installs
 	done
 	@echo "done. next: make data-bootstrap"
 
+.PHONY: bootstrap
+bootstrap: ## One command: install everything, fetch the data, and start
+	@$(PYTHON) scripts/dev.py bootstrap
+
 .PHONY: toolchain
 toolchain: ## Download the Go toolchain into .toolchain (no sudo required)
 	@$(PYTHON) scripts/dev.py toolchain
+
+.PHONY: node
+node: ## Download the Node toolchain into .toolchain (no sudo required)
+	@$(PYTHON) scripts/dev.py node
 
 # ---------------------------------------------------------------- data
 .PHONY: data-bootstrap
