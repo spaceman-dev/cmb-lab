@@ -56,13 +56,19 @@ log "Resources: $(nproc) vCPU, ${MEM_MB} MB RAM + ${SWAP_MB} MB swap = ${USABLE_
 # ── 1. System packages ──────────────────────────────────────────────────────────────────
 log "Installing system packages (a few minutes)"
 if [[ $OS_FAMILY == rhel ]]; then
-  dnf install -y -q oracle-epel-release-el9 2>/dev/null \
-    || dnf install -y -q epel-release 2>/dev/null || true
-  dnf groupinstall -y -q "Development Tools" 2>/dev/null || dnf install -y -q gcc gcc-c++ make
-  dnf install -y -q \
-    gcc-gfortran git curl wget pkgconf-pkg-config \
+  # Only gfortran is genuinely required: CAMB builds from source, while numpy, scipy,
+  # healpy and astropy all ship manylinux wheels. Installing the "Development Tools"
+  # group instead would drag in valgrind and desktop-portal packages — hundreds of MB
+  # of nothing useful on a headless 1 GB box.
+  dnf install -y -q gcc gcc-c++ make gcc-gfortran git curl wget pkgconf-pkg-config \
     python3.12 python3.12-devel python3.12-pip \
-    cfitsio-devel openblas-devel
+    || die "Could not install build prerequisites."
+
+  # Optional: only needed if pip has to build healpy from source rather than use a wheel.
+  dnf install -y -q oracle-epel-release-el9 >/dev/null 2>&1 \
+    || dnf install -y -q epel-release >/dev/null 2>&1 || true
+  dnf install -y -q cfitsio-devel openblas-devel >/dev/null 2>&1 \
+    || warn "cfitsio/openblas headers unavailable — fine, pip will use prebuilt wheels."
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
