@@ -71,12 +71,16 @@ command -v oci >/dev/null || die "OCI CLI not found.
   In the OCI Console, click the '>_' Cloud Shell icon — it is pre-installed there.
   Locally: brew install oci-cli && oci setup config"
 
-# Cloud Shell authenticates with a delegation token; a local install uses ~/.oci/config.
-OCI_ARGS=()
+# Cloud Shell authenticates with a delegation token; elsewhere the CLI uses ~/.oci/config.
+# Wrapped in a function because macOS ships bash 3.2, where expanding an empty array under
+# `set -u` is an error.
+OCI_AUTH=""
 if [[ -n "${OCI_CLI_CLOUD_SHELL:-}" ]] || [[ -f /etc/oci-cloud-shell ]] || [[ -n "${OCI_CS_USER_OCID:-}" ]]; then
-  OCI_ARGS+=(--auth instance_obo_user)
+  OCI_AUTH="instance_obo_user"
   log "Running in Cloud Shell — using the delegation token."
 fi
+
+oci_call() { oci ${OCI_AUTH:+--auth "$OCI_AUTH"} "$@"; }
 
 # ── Discover the tenancy ────────────────────────────────────────────────────────────────
 COMPARTMENT_OCID="${COMPARTMENT_OCID:-${OCI_TENANCY:-}}"
@@ -90,7 +94,7 @@ fi
 # ── Discover the image: newest Oracle Linux 9 that supports this shape ──────────────────
 if [[ -z "${IMAGE_OCID:-}" ]]; then
   log "Finding the latest Oracle Linux 9 image for $SHAPE ..."
-  IMAGE_OCID=$(oci compute image list "${OCI_ARGS[@]}" \
+  IMAGE_OCID=$(oci_call compute image list  \
     --compartment-id "$COMPARTMENT_OCID" \
     --operating-system "Oracle Linux" --operating-system-version "9" \
     --shape "$SHAPE" --sort-by TIMECREATED --sort-order DESC \
@@ -106,7 +110,7 @@ fi
 # nobody can reach the site. So we insist on a subnet with public IPs enabled.
 if [[ -z "${SUBNET_OCID:-}" ]]; then
   log "Looking for a public subnet ..."
-  SUBNET_OCID=$(oci network subnet list "${OCI_ARGS[@]}" \
+  SUBNET_OCID=$(oci_call network subnet list  \
     --compartment-id "$COMPARTMENT_OCID" --all \
     --query 'data[?"prohibit-public-ip-on-vnic"==`false`]|[0].id' \
     --raw-output 2>/dev/null)
@@ -134,7 +138,7 @@ fi
 # ── Availability domains ────────────────────────────────────────────────────────────────
 # Capacity is tracked per-AD, so AD-1 being full says nothing about AD-2. Trying all of
 # them on each pass materially improves the odds.
-mapfile -t ADS < <(oci iam availability-domain list "${OCI_ARGS[@]}" \
+mapfile -t ADS < <(oci_call iam availability-domain list  \
   --compartment-id "$COMPARTMENT_OCID" --query 'data[].name' --raw-output 2>/dev/null \
   | tr -d '[]", ' | grep -v '^$')
 (( ${#ADS[@]} )) || die "Could not list availability domains. Is the CLI authenticated?"
@@ -142,7 +146,7 @@ mapfile -t ADS < <(oci iam availability-domain list "${OCI_ARGS[@]}" \
 # ── Do not exceed the Always Free quota with what already exists ────────────────────────
 # The allowance is tenancy-wide, not per-instance, so a forgotten instance silently eats
 # into it. Anything beyond the envelope starts billing.
-used=$(oci compute instance list "${OCI_ARGS[@]}" \
+used=$(oci_call compute instance list  \
   --compartment-id "$COMPARTMENT_OCID" --all \
   --query 'data[?"lifecycle-state"!=`TERMINATED`].{s:shape,o:"shape-config".ocpus,m:"shape-config"."memory-in-gbs",n:"display-name",id:id}' \
   --output json 2>/dev/null)
@@ -208,7 +212,7 @@ while :; do
   for ad in "${ADS[@]}"; do
     printf '[%s] pass %-4d %-28s ' "$(date +%H:%M:%S)" "$attempt" "$ad"
 
-    output=$(oci compute instance launch "${OCI_ARGS[@]}" \
+    output=$(oci_call compute instance launch  \
       --compartment-id "$COMPARTMENT_OCID" \
       --availability-domain "$ad" \
       --display-name "$DISPLAY_NAME" \
@@ -224,7 +228,7 @@ while :; do
 
     if (( rc == 0 )); then
       instance_id=$(grep -oE 'ocid1\.instance\.[a-z0-9.-]+' <<<"$output" | head -1)
-      ip=$(oci compute instance list-vnics "${OCI_ARGS[@]}" --instance-id "$instance_id" \
+      ip=$(oci_call compute instance list-vnics  --instance-id "$instance_id" \
              --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
       cat <<EOF
 CREATED

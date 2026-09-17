@@ -33,10 +33,15 @@ confirm() {
 command -v oci >/dev/null || die "OCI CLI not found.
   Use Cloud Shell: click the '>_' icon in the OCI Console top bar."
 
-OCI_ARGS=()
+# Cloud Shell authenticates with a delegation token; elsewhere the CLI uses ~/.oci/config.
+# Wrapped in a function because macOS ships bash 3.2, where expanding an empty array under
+# `set -u` is an error.
+OCI_AUTH=""
 if [[ -n "${OCI_CLI_CLOUD_SHELL:-}" ]] || [[ -f /etc/oci-cloud-shell ]] || [[ -n "${OCI_CS_USER_OCID:-}" ]]; then
-  OCI_ARGS+=(--auth instance_obo_user)
+  OCI_AUTH="instance_obo_user"
 fi
+
+oci_call() { oci ${OCI_AUTH:+--auth "$OCI_AUTH"} "$@"; }
 
 COMPARTMENT_OCID="${COMPARTMENT_OCID:-${OCI_TENANCY:-}}"
 [[ -n "$COMPARTMENT_OCID" ]] || COMPARTMENT_OCID=$(awk -F= '/^tenancy=/{print $2; exit}' ~/.oci/config 2>/dev/null)
@@ -45,7 +50,7 @@ COMPARTMENT_OCID="${COMPARTMENT_OCID:-${OCI_TENANCY:-}}"
 
 # ── 1. Inventory, and clear out anything that cannot run the app ────────────────────────
 log "Existing instances"
-rows=$(oci compute instance list "${OCI_ARGS[@]}" \
+rows=$(oci_call compute instance list  \
   --compartment-id "$COMPARTMENT_OCID" --all \
   --query 'data[?"lifecycle-state"!=`TERMINATED`].[id,"display-name",shape,"shape-config"."memory-in-gbs","lifecycle-state"]' \
   --output json 2>/dev/null)
@@ -75,7 +80,7 @@ print('\n'.join(f\"{r[0]}\t{r[1]}\" for r in json.loads(sys.argv[1]) if (r[3] or
     while IFS=$'\t' read -r oid name; do
       [[ -z "$oid" ]] && continue
       if confirm "Terminate '$name'?"; then
-        oci compute instance terminate "${OCI_ARGS[@]}" \
+        oci_call compute instance terminate  \
           --instance-id "$oid" --force --wait-for-state TERMINATED >/dev/null 2>&1 \
           && ok "terminated $name" || warn "could not terminate $name"
       else
@@ -87,7 +92,7 @@ fi
 
 # ── 2. Network ──────────────────────────────────────────────────────────────────────────
 log "Checking for a public subnet"
-subnet=$(oci network subnet list "${OCI_ARGS[@]}" \
+subnet=$(oci_call network subnet list  \
   --compartment-id "$COMPARTMENT_OCID" --all \
   --query 'data[?"prohibit-public-ip-on-vnic"==`false`]|[0].id' --raw-output 2>/dev/null)
 
@@ -96,7 +101,7 @@ if [[ -n "$subnet" && "$subnet" != "null" ]]; then
 else
   warn "none found — an instance without one cannot have a public IP"
   "$HERE/setup-network.sh" || die "network setup failed"
-  subnet=$(oci network subnet list "${OCI_ARGS[@]}" \
+  subnet=$(oci_call network subnet list  \
     --compartment-id "$COMPARTMENT_OCID" --all \
     --query 'data[?"prohibit-public-ip-on-vnic"==`false`]|[0].id' --raw-output 2>/dev/null)
   [[ -n "$subnet" && "$subnet" != "null" ]] || die "still no public subnet"

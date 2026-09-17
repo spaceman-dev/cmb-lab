@@ -30,11 +30,16 @@ die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 command -v oci >/dev/null || die "OCI CLI not found. Use Cloud Shell ('>_' in the console),
   or install locally: brew install oci-cli && oci setup config"
 
-OCI_ARGS=()
+# Cloud Shell authenticates with a delegation token; elsewhere the CLI uses ~/.oci/config.
+# Wrapped in a function because macOS ships bash 3.2, where expanding an empty array under
+# `set -u` is an error.
+OCI_AUTH=""
 if [[ -n "${OCI_CLI_CLOUD_SHELL:-}" ]] || [[ -f /etc/oci-cloud-shell ]] || [[ -n "${OCI_CS_USER_OCID:-}" ]]; then
-  OCI_ARGS+=(--auth instance_obo_user)
+  OCI_AUTH="instance_obo_user"
   log "Cloud Shell detected — using the delegation token"
 fi
+
+oci_call() { oci ${OCI_AUTH:+--auth "$OCI_AUTH"} "$@"; }
 
 # The root compartment's OCID *is* the tenancy OCID. Cloud Shell exports it for us.
 COMPARTMENT_OCID="${COMPARTMENT_OCID:-${OCI_TENANCY:-}}"
@@ -53,7 +58,7 @@ fi
 log "Compartment: ${COMPARTMENT_OCID:0:32}..."
 
 # ── Reuse an existing public subnet if there already is one ─────────────────────────────
-existing=$(oci network subnet list "${OCI_ARGS[@]}" \
+existing=$(oci_call network subnet list  \
   --compartment-id "$COMPARTMENT_OCID" --all \
   --query 'data[?"prohibit-public-ip-on-vnic"==`false`]|[0].id' --raw-output 2>/dev/null)
 if [[ -n "$existing" && "$existing" != "null" ]]; then
@@ -67,7 +72,7 @@ fi
 
 # ── VCN ─────────────────────────────────────────────────────────────────────────────────
 log "Creating VCN $VCN_NAME ($VCN_CIDR)"
-VCN_ID=$(oci network vcn create "${OCI_ARGS[@]}" \
+VCN_ID=$(oci_call network vcn create  \
   --compartment-id "$COMPARTMENT_OCID" \
   --display-name "$VCN_NAME" --cidr-blocks "[\"$VCN_CIDR\"]" \
   --dns-label cmblab \
@@ -78,7 +83,7 @@ ok "$VCN_ID"
 
 # ── Internet Gateway ────────────────────────────────────────────────────────────────────
 log "Creating Internet Gateway"
-IGW_ID=$(oci network internet-gateway create "${OCI_ARGS[@]}" \
+IGW_ID=$(oci_call network internet-gateway create  \
   --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" \
   --display-name "${VCN_NAME}-igw" --is-enabled true \
   --wait-for-state AVAILABLE \
@@ -88,7 +93,7 @@ ok "$IGW_ID"
 
 # ── Route table: send everything not local to the gateway ───────────────────────────────
 log "Creating route table (0.0.0.0/0 -> Internet Gateway)"
-RT_ID=$(oci network route-table create "${OCI_ARGS[@]}" \
+RT_ID=$(oci_call network route-table create  \
   --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" \
   --display-name "${VCN_NAME}-rt" \
   --route-rules "[{\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\",\"networkEntityId\":\"$IGW_ID\"}]" \
@@ -108,7 +113,7 @@ INGRESS='[
 ]'
 EGRESS='[{"protocol":"all","destination":"0.0.0.0/0","isStateless":false}]'
 
-SL_ID=$(oci network security-list create "${OCI_ARGS[@]}" \
+SL_ID=$(oci_call network security-list create  \
   --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" \
   --display-name "${VCN_NAME}-sl" \
   --ingress-security-rules "$INGRESS" --egress-security-rules "$EGRESS" \
@@ -120,7 +125,7 @@ ok "$SL_ID"
 # ── Public subnet ───────────────────────────────────────────────────────────────────────
 # prohibit-public-ip-on-vnic=false is the flag that makes this subnet "public".
 log "Creating public subnet $SUBNET_NAME ($SUBNET_CIDR)"
-SUBNET_ID=$(oci network subnet create "${OCI_ARGS[@]}" \
+SUBNET_ID=$(oci_call network subnet create  \
   --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" \
   --display-name "$SUBNET_NAME" --cidr-block "$SUBNET_CIDR" \
   --route-table-id "$RT_ID" --security-list-ids "[\"$SL_ID\"]" \
