@@ -7,6 +7,12 @@
 An independent reproduction of the cosmic microwave background power spectrum, served as a
 service-oriented web application with a physics teaching layer built in.
 
+### ▶ [Try it live at 152.70.78.53](http://152.70.78.53)
+
+<sub>No install, no sign-up. The demo runs on a free-tier VM: plain HTTP, one core, 1 GB RAM.
+Browsing, the spectrum, sky maps and the lessons are quick; MCMC fits are slow.
+Run it [locally](#quick-start) for the full experience.</sub>
+
 [Quick start](#quick-start) · [What it does](#what-it-does) · [Use cases](#use-cases) ·
 [Using the site](#using-the-site) · [Deploy it](deploy/oracle/README.md) · [New here?](docs/onboarding.md)
 
