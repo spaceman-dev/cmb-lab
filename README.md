@@ -106,23 +106,75 @@ limitations.
 
 ## Quick start
 
-**Requirements:** Python 3.12, Node 20+, Go 1.22+, ~2 GB disk, macOS or Linux.
+**Requirements:** Python 3.12, Node 20+, ~2 GB disk. Go is downloaded into the repo
+automatically — you do not need it installed.
 
-> Python **3.12 specifically** — healpy and camb do not yet ship arm64 wheels for 3.14.
+> Python **3.12 specifically** — healpy and camb do not yet ship wheels for 3.13+.
+
+| Platform | How |
+| :-- | :-- |
+| **macOS** (Intel or Apple Silicon) | Natively, below |
+| **Linux** (x86-64 or ARM) | Natively, below |
+| **Windows** | Via **WSL2** or **Docker** — see [Windows](#windows) |
 
 ```bash
-git clone https://github.com/<you>/cmb-lab.git
+git clone https://github.com/spaceman-dev/cmb-lab.git
 cd cmb-lab
 
-make setup            # venv, dependencies, Go toolchain, npm install
+make setup            # venv + every package
+make toolchain        # fetch Go for this OS/arch
+make build            # gateway binary + frontend
 make data-bootstrap   # ~170 MB from NASA LAMBDA and ESA. No API key, no account
-make spectrum         # run the pipeline: gates G1-G4
 
 ./scripts/dev.sh up   # start all 9 services
-make web              # frontend at http://localhost:5174
 ```
 
-`./scripts/dev.sh status` prints a health table. Logs land in `data/logs/`.
+Then open **http://localhost:5174**.
+
+Everything is driven by [scripts/dev.py](scripts/dev.py), which behaves identically on every
+platform — `setup`, `toolchain`, `build`, `up`, `down`, `restart`, `status`, `logs`, `doctor`.
+`scripts/dev.sh` and `scripts/dev.ps1` are thin wrappers around it, so there is only one
+implementation to keep correct. `make` is a convenience, never a requirement.
+
+```bash
+python scripts/dev.py doctor     # check this machine has what it needs
+python scripts/dev.py status     # health table for all 9 services
+python scripts/dev.py logs chat  # follow one service
+```
+
+Logs land in `data/logs/`.
+
+### Windows
+
+**Native Windows is not possible, and the reason is worth knowing:**
+[healpy has no Windows build](https://pypi.org/project/healpy/) — no wheels, and upstream
+states plainly that *"healpy does not currently support Windows."* It is the library that does
+every spherical-harmonic transform here, so `spectrum`, `anomaly`, `skymap` and `tutor` cannot
+run without it. Everything else (`camb`, `astropy`, `numpy`, `scipy`) has Windows wheels; healpy
+alone is the blocker.
+
+Two good ways around it:
+
+**WSL2 — recommended.** A real Linux kernel on your Windows machine, at native speed. This is
+also healpy's own recommendation.
+
+```powershell
+wsl --install -d Ubuntu          # then reboot, open Ubuntu
+```
+
+```bash
+sudo apt update && sudo apt install -y python3.12 python3.12-venv build-essential
+# then follow the Linux instructions above, unchanged
+```
+
+**Docker — no toolchain at all.** The whole stack in one container, on one port:
+
+```powershell
+docker build -t cmb-lab .
+docker run -p 7860:7860 cmb-lab     # then open http://localhost:7860
+```
+
+This is what the hosted demo runs.
 
 ### Optional: the AI assistant
 
@@ -334,6 +386,8 @@ Stated plainly, because a result without its caveats is not a result.
 - **TT only.** No polarisation.
 - **Audio narration needs macOS** (`say`/`afconvert`). Elsewhere the browser's speech
   synthesis takes over automatically.
+- **No native Windows**, because healpy has no Windows build. WSL2 and Docker both work
+  fully — see [Windows](#windows).
 
 ---
 

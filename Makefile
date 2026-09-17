@@ -40,13 +40,7 @@ setup: .env $(VENV) ## Full dev setup: venv + editable installs
 
 .PHONY: toolchain
 toolchain: ## Download the Go toolchain into .toolchain (no sudo required)
-	@test -x $(GO) || ( \
-		mkdir -p .toolchain && \
-		VER=$$(curl -s https://go.dev/VERSION?m=text | head -1) && \
-		echo "downloading $$VER" && \
-		curl -sL "https://go.dev/dl/$$VER.darwin-arm64.tar.gz" -o .toolchain/go.tar.gz && \
-		tar -xzf .toolchain/go.tar.gz -C .toolchain && rm .toolchain/go.tar.gz )
-	@$(GO) version
+	@$(PYTHON) scripts/dev.py toolchain
 
 # ---------------------------------------------------------------- data
 .PHONY: data-bootstrap
@@ -127,6 +121,10 @@ fit: ## Run an MCMC cosmological fit on the command line (gate G5)
 worker: ## Run a Celery worker (QUEUE=ingest|spectrum|cosmology|anomaly)
 	$(BIN)/celery -A cmblab_core.jobs.celery_app:app worker \
 		--loglevel=INFO --concurrency=$${CONCURRENCY:-4} -Q $${QUEUE:-ingest}
+
+.PHONY: build
+build: ## Build the gateway binary and the production frontend
+	@$(PYTHON) scripts/dev.py build
 
 .PHONY: gateway
 gateway: gateway-build ## Run the Go gateway
