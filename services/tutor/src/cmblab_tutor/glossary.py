@@ -6,6 +6,7 @@ source material beats a generative one with none.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,58 @@ class Term:
 
 
 _ENTRIES = [
+    Term(
+        key="cmb",
+        term="Cosmic microwave background (CMB)",
+        short="The light released when the universe first became transparent, 380,000 "
+        "years after the Big Bang.",
+        long=(
+            "Before recombination the universe was an opaque plasma: free electrons "
+            "scattered photons constantly, so light could not travel far. Around 380,000 "
+            "years in, expansion cooled it to roughly 3000 K, electrons and protons "
+            "combined into neutral hydrogen, and the fog lifted. The light set free at "
+            "that moment has been travelling ever since, stretched by expansion into "
+            "microwaves at 2.7255 K. Because more distant light takes longer to arrive, "
+            "what we observe is a spherical surface centred on us — the surface of last "
+            "scattering. Its temperature varies by about one part in 100,000, and those "
+            "variations are frozen sound waves that encode what the universe is made of."
+        ),
+        latex=r"T_0 = 2.7255 \pm 0.0006\ \mathrm{K}",
+        lesson="origin",
+        section="hot-soup",
+        aliases=[
+            "cmb",
+            "cosmic microwave background",
+            "cosmic microwave background radiation",
+            "microwave background",
+            "relic radiation",
+            "surface of last scattering",
+        ],
+    ),
+    Term(
+        key="recombination",
+        term="Recombination",
+        short="When electrons and protons combined into neutral hydrogen and the universe "
+        "became transparent.",
+        long=(
+            "At redshift z ≈ 1090, about 380,000 years after the Big Bang, the universe "
+            "cooled to roughly 3000 K and free electrons combined with protons to form "
+            "neutral hydrogen. Neutral hydrogen does not scatter photons at these "
+            "energies, so the universe turned transparent and released the CMB. It "
+            "happens far below hydrogen's 13.6 eV binding energy because photons "
+            "outnumber baryons a billion to one, so even the rare energetic tail keeps "
+            "hydrogen ionised until things are much cooler."
+        ),
+        latex=r"z_* \simeq 1090,\qquad T_* \simeq 3000\ \mathrm{K}",
+        lesson="origin",
+        section="hot-soup",
+        aliases=[
+            "recombination",
+            "last scattering",
+            "decoupling",
+            "when the universe became transparent",
+        ],
+    ),
     Term(
         key="multipole",
         term="Multipole (ℓ)",
@@ -343,25 +396,74 @@ _STOPWORDS = frozenset(
 )
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_]+", text.lower())
+
+
+def _significant(text: str) -> list[str]:
+    """Words that carry meaning, with stopwords dropped.
+
+    Applied to term names as well as the query: comparing a stopword-stripped query
+    against a raw name means "Axis of Evil" never matches the term of that name.
+    """
+    return [w for w in _words(text) if len(w) > 1 and w not in _STOPWORDS]
+
+
 def search_glossary(query: str, limit: int = 6) -> list[dict[str, Any]]:
-    """Token-overlap search across term names, aliases, and definitions."""
-    tokens = {
-        token
-        for token in query.lower().replace("?", " ").replace(",", " ").split()
-        if len(token) > 1 and token not in _STOPWORDS
-    }
+    """Rank glossary terms against a question.
+
+    Scoring is word-based rather than substring-based. Substring matching made "cosmic
+    microwave background" rank "Cosmic variance" first (it contains "cosmic") and "what is
+    cmb" rank "CMB Cold Spot" (it contains "cmb"), which is exactly backwards.
+
+    The ranking is driven by two ideas:
+      * an exact match against a term name or alias should dominate everything else, and
+      * a candidate is penalised for the words in *its own name* that the query never
+        mentioned, so a short precise term beats a longer one it happens to be a prefix of.
+    """
+    tokens = _significant(query)
     if not tokens:
         return []
 
-    scored: list[tuple[int, Term]] = []
-    for entry in GLOSSARY.values():
-        haystack_strong = f"{entry.term} {' '.join(entry.aliases)} {entry.key}".lower()
-        haystack_weak = f"{entry.short} {entry.long}".lower()
+    token_set = set(tokens)
+    phrase = " ".join(tokens)
 
-        score = sum(4 for t in tokens if t in haystack_strong)
-        score += sum(1 for t in tokens if t in haystack_weak)
-        if score:
+    scored: list[tuple[float, Term]] = []
+    for entry in GLOSSARY.values():
+        names = [entry.term, entry.key, *entry.aliases]
+        score = 0.0
+
+        # Whole query is exactly a name: unambiguous, outrank everything.
+        if any(phrase == " ".join(_significant(n)) for n in names):
+            score += 100
+
+        # Whole query appears inside a name, or a name inside the query.
+        for name in names:
+            name_phrase = " ".join(_significant(name))
+            if not name_phrase:
+                continue
+            if name_phrase in phrase or phrase in name_phrase:
+                score += 25
+
+        # Word overlap against names, normalised by the name's own length so a one-word
+        # hit on a two-word term does not beat a full match on a one-word term.
+        best_name = 0.0
+        for name in names:
+            nw = set(_significant(name))
+            if not nw:
+                continue
+            hit = token_set & nw
+            if hit:
+                coverage = len(hit) / len(nw)
+                best_name = max(best_name, 10 * len(hit) * coverage)
+        score += best_name
+
+        # Definition text is weak evidence; it should only break ties.
+        body = set(_words(f"{entry.short} {entry.long}"))
+        score += 0.5 * len(token_set & body)
+
+        if score > 0:
             scored.append((score, entry))
 
-    scored.sort(key=lambda pair: -pair[0])
-    return [{**entry.public(), "score": score} for score, entry in scored[:limit]]
+    scored.sort(key=lambda pair: (-pair[0], pair[1].term))
+    return [{**entry.public(), "score": round(score, 2)} for score, entry in scored[:limit]]

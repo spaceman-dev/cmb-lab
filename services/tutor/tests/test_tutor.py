@@ -220,3 +220,59 @@ def test_lesson_payload_exposes_the_new_fields():
     assert "plain" in section
     assert "variables" in section["equations"][0]
     assert "intuition" in section["equations"][0]
+
+
+# ── glossary ranking ────────────────────────────────────────────────────────────────────
+#
+# Substring matching used to rank "Cosmic variance" first for "cosmic microwave
+# background", and "CMB Cold Spot" for "what is cmb" — the term merely contained the
+# query as a substring. Both are answers to a different question than the one asked, which
+# is worse than no answer in a teaching tool.
+
+
+def test_every_term_finds_itself_first():
+    from cmblab_tutor.glossary import GLOSSARY, search_glossary
+
+    for entry in GLOSSARY.values():
+        hits = search_glossary(entry.term, limit=1)
+        assert hits, f"{entry.term!r} returned nothing"
+        assert hits[0]["key"] == entry.key, (
+            f"{entry.term!r} ranked {hits[0]['term']!r} above itself"
+        )
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("what is cmb?", "cmb"),
+        ("What is the CMB?", "cmb"),
+        ("what is this cosmic microwave background radiation about?", "cmb"),
+        ("cosmic microwave background", "cmb"),
+        ("what is recombination", "recombination"),
+        ("when did the universe become transparent", "recombination"),
+        ("what is the cold spot", "cold_spot"),
+        ("explain cosmic variance", "cosmic_variance"),
+        ("what is a cross-spectrum", "cross_spectrum"),
+        ("what is a multipole", "multipole"),
+        ("axis of evil", "axis_of_evil"),
+        ("what is the look-elsewhere effect", "look_elsewhere"),
+        ("what is lambda cdm", "lcdm"),
+        ("what is the sound horizon", "sound_horizon"),
+        ("what is the hubble tension", "hubble_tension"),
+    ],
+)
+def test_glossary_returns_the_term_actually_asked_about(query, expected):
+    from cmblab_tutor.glossary import search_glossary
+
+    hits = search_glossary(query, limit=1)
+    assert hits, f"{query!r} returned nothing"
+    assert hits[0]["key"] == expected, f"{query!r} returned {hits[0]['term']!r}"
+
+
+def test_cmb_outranks_terms_that_merely_contain_the_word():
+    """The regression that started this: 'cmb' must not land on 'CMB Cold Spot'."""
+    from cmblab_tutor.glossary import search_glossary
+
+    hits = search_glossary("what is the cmb", limit=3)
+    assert hits[0]["key"] == "cmb"
+    assert hits[0]["score"] > 3 * hits[1]["score"], "margin over the runner-up is too thin"
