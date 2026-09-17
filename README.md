@@ -124,7 +124,7 @@ python3 scripts/dev.py bootstrap
 ```powershell
 git clone https://github.com/spaceman-dev/cmb-lab.git
 cd cmb-lab
-.\scripts\dev.ps1 bootstrap
+.\scripts\dev.cmd bootstrap
 ```
 
 </td></tr>
@@ -165,18 +165,26 @@ is handled for you:
 ```powershell
 git clone https://github.com/spaceman-dev/cmb-lab.git
 cd cmb-lab
-.\scripts\dev.ps1 bootstrap
+.\scripts\dev.cmd bootstrap
 ```
 
 Then open **http://localhost:7860**. That is the whole setup. You do not need Python, Node
 or Go on Windows — only Docker.
 
 ```powershell
-.\scripts\dev.ps1 status     # is it up?
-.\scripts\dev.ps1 logs       # follow the logs
-.\scripts\dev.ps1 down       # stop it
-.\scripts\dev.ps1 bootstrap -Backend wsl   # use WSL instead of Docker
+.\scripts\dev.cmd status     # is it up?
+.\scripts\dev.cmd logs       # follow the logs
+.\scripts\dev.cmd down       # stop it
+.\scripts\dev.cmd bootstrap -Backend wsl   # use WSL instead of Docker
 ```
+
+> **Use `dev.cmd`, not `dev.ps1`.** A default Windows install sets the PowerShell execution
+> policy to `Restricted`, so running `.\scripts\dev.ps1` directly fails with
+> *"running scripts is disabled on this system"*. Batch files are exempt from that policy,
+> so `dev.cmd` launches the same script with the policy bypassed **for that one process
+> only** — it changes nothing on your machine. If you would rather allow scripts
+> permanently, `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` needs no admin rights,
+> and then `dev.ps1` works too.
 
 **Why not natively?** [healpy has no Windows build](https://pypi.org/project/healpy/) — no
 wheels, and upstream states plainly that *"healpy does not currently support Windows."* It

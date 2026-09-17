@@ -94,3 +94,22 @@ jobs:
       - name: the PowerShell wrapper reaches dev.py
         shell: pwsh
         run: .\scripts\dev.ps1 doctor
+
+      # A default Windows install has the execution policy set to Restricted, which blocks
+      # dev.ps1 entirely. dev.cmd must still work, because batch files are exempt.
+      - name: dev.cmd works when script execution is disabled
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Restricted -Force
+          Write-Host "policy is now: $(Get-ExecutionPolicy -Scope CurrentUser)"
+
+          # Confirm this really does block dev.ps1, so the test below means something.
+          pwsh -NoProfile -Command ".\scripts\dev.ps1 doctor" 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Warning "dev.ps1 was not blocked; test is weaker" }
+
+          cmd /c "scripts\dev.cmd doctor"
+          if ($LASTEXITCODE -ne 0) { Write-Error "dev.cmd failed under Restricted"; exit 1 }
+
+          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+          Write-Host "dev.cmd works under Restricted"
+          exit 0
