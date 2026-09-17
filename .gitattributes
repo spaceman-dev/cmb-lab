@@ -1,0 +1,28 @@
+# Line endings.
+#
+# Git for Windows checks files out with CRLF by default. A shell script with CRLF fails
+# the instant it runs on Linux, because the shebang is read as `#!/usr/bin/env bash\r`
+# and there is no binary called "bash\r" — the container exits immediately with
+#
+#   env: 'bash\r': No such file or directory
+#
+# Forcing LF in the working tree on every platform avoids that entirely.
+
+* text=auto eol=lf
+
+# cmd.exe is the exception: batch files genuinely need CRLF, and misparse labels
+# and multi-line blocks without it.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Never rewrite binaries.
+*.png binary
+*.jpg binary
+*.ico binary
+*.gz  binary
+*.xz  binary
+*.zip binary
+*.fits binary
+*.npz binary
+*.woff binary
+*.woff2 binary

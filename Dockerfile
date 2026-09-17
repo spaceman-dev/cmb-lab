@@ -66,7 +66,9 @@ RUN pip install --upgrade pip wheel \
 COPY --from=web /build/web/dist ./web/dist
 COPY --from=gateway /gateway /usr/local/bin/gateway
 COPY deploy/docker/start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
+# Strip CR in case the build context came from a Windows checkout predating .gitattributes:
+# a shebang ending in \r makes the container exit with "env: 'bash\r': No such file".
+RUN sed -i 's/\r$//' /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
 
 # Bake the archive data into the image so the container starts ready to use. If the build
 # environment has no network, this is skipped and start.sh fetches it on first boot.

@@ -79,6 +79,21 @@ jobs:
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
           Write-Host "dev.ps1 parses cleanly"
 
+      # Git for Windows converts LF to CRLF unless .gitattributes says otherwise, and a
+      # CRLF shell script kills the container at startup with "env: 'bash\r': not found".
+      - name: shell scripts stay LF after a Windows checkout
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($f in Get-ChildItem -Recurse -Filter *.sh) {
+            if ([System.IO.File]::ReadAllBytes($f.FullName) -contains 13) { $bad += $f.Name }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Error "CRLF found in: $($bad -join ', ')"
+            exit 1
+          }
+          Write-Host "all shell scripts are LF"
+
       - name: dev.py runs on Windows
         run: python scripts/dev.py doctor
 
