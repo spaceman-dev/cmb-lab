@@ -137,11 +137,19 @@ fi
 
 # ── Availability domains ────────────────────────────────────────────────────────────────
 # Capacity is tracked per-AD, so AD-1 being full says nothing about AD-2. Trying all of
-# them on each pass materially improves the odds.
-mapfile -t ADS < <(oci_call iam availability-domain list  \
+# them on each pass materially improves the odds. (Some regions, Hyderabad included, have
+# only one AD — then this is just a single attempt per pass.)
+#
+# Built with a read loop rather than mapfile, which is bash 4+ and absent on macOS.
+ADS=""
+while IFS= read -r ad; do
+  [[ -n "$ad" ]] && ADS="${ADS}${ad} "
+done < <(oci_call iam availability-domain list \
   --compartment-id "$COMPARTMENT_OCID" --query 'data[].name' --raw-output 2>/dev/null \
   | tr -d '[]", ' | grep -v '^$')
-(( ${#ADS[@]} )) || die "Could not list availability domains. Is the CLI authenticated?"
+
+[[ -n "$ADS" ]] || die "Could not list availability domains. Is the CLI authenticated?
+  Session tokens expire after an hour: oci session authenticate --profile-name \$OCI_CLI_PROFILE"
 
 # ── Do not exceed the Always Free quota with what already exists ────────────────────────
 # The allowance is tenancy-wide, not per-instance, so a forgotten instance silently eats
@@ -195,7 +203,7 @@ cat <<EOF
   Image:   ${IMAGE_OCID:0:40}...
   Subnet:  ${SUBNET_OCID:0:40}...  (public IPs enabled)
   Key:     $SSH_PUBLIC_KEY
-  ADs:     ${ADS[*]}
+  ADs:     ${ADS}
 
   Retrying every ${INTERVAL}s across every AD. Ctrl-C to stop.
   Keep this running — capacity frees up unpredictably.
@@ -209,7 +217,7 @@ while :; do
     die "Gave up after $MAX_ATTEMPTS passes."
   fi
 
-  for ad in "${ADS[@]}"; do
+  for ad in $ADS; do
     printf '[%s] pass %-4d %-28s ' "$(date +%H:%M:%S)" "$attempt" "$ad"
 
     output=$(oci_call compute instance launch  \
